@@ -14,7 +14,19 @@ export interface GraphIndex {
   membership: ReadonlyMap<string, { service?: string; pkg?: string; owner?: string }>;
   evidenceById: ReadonlyMap<string, EvidenceRecord>;
   evidenceBySubject: ReadonlyMap<string, readonly string[]>;
+  fanInByNode: ReadonlyMap<string, number>;
+  fanOutByNode: ReadonlyMap<string, number>;
+  telemetryByNode: ReadonlyMap<string, { rpm?: number; qps?: number; p99?: number; errorRate?: number; lag?: number }>;
+  findingNodeIds: ReadonlySet<string>;
 }
+
+export interface GraphIndexFacts {
+  telemetry?: Array<{ nodeId: string; rpm?: number; qps?: number; p99?: number; errorRate?: number; lag?: number }>;
+  findingNodeIds?: Iterable<string>;
+}
+
+export type RelevanceSignal = 'change' | 'direct' | 'runtime' | 'contract' | 'failure' | 'ownership' | 'architecture' | 'structural';
+export type RelevanceWeights = Partial<Record<RelevanceSignal, number>>;
 
 export interface RelationshipPolicy {
   defaultKinds: readonly EdgeKind[];
@@ -30,6 +42,7 @@ export interface ProjectionDefinition {
   relationshipPolicy: RelationshipPolicy;
   defaultDepth: { upstream: ProjectionDepth; downstream: ProjectionDepth };
   layoutStrategy: 'dependency-LR' | 'dataflow-LR' | 'review-LR';
+  relevanceWeights: RelevanceWeights;
 }
 
 export type InclusionReason =
@@ -40,7 +53,7 @@ export type InclusionReason =
 
 export interface CandidateExplanation {
   total: number;
-  components: Array<{ signal: string; raw: number; normalized: number; weight: number; contribution: number; evidenceIds: string[] }>;
+  components: Array<{ signal: RelevanceSignal | 'root' | 'overview'; raw: number; normalized: number; weight: number; contribution: number; evidenceIds: string[] }>;
   reason: string;
 }
 

@@ -1,5 +1,6 @@
-import type { EdgeKind, NodeKind, SysEdge, SysNode } from '../../data/types';
+import type { EdgeKind, NodeKind, SysEdge } from '../../data/types';
 import type { CandidateExplanation, FrontierGroup, GraphIndex, InclusionReason, ProjectionDefinition, ProjectionDepth, ProjectionDirection, VisibleEdge, VisibleGraph, VisibleNode } from '../types';
+import { compareCandidates, scoreCandidate, type RelevanceCandidate } from './relevance.ts';
 
 export type FrontierExpansions = Record<string, number>;
 
@@ -51,9 +52,8 @@ function category(edge: SysEdge, direction: ProjectionDirection) {
   return direction === 'upstream' ? 'upstream dependencies' : 'downstream dependencies';
 }
 
-function explanation(reason: InclusionReason): CandidateExplanation {
-  const depth = reason.kind === 'traversal' ? reason.semanticDepth : 0;
-  const contribution = reason.kind === 'root' ? 100 : reason.kind === 'overview' ? 10 : Math.max(1, 50 - depth * 10);
+function explanation(reason: Extract<InclusionReason, { kind: 'root' | 'overview' }>): CandidateExplanation {
+  const contribution = reason.kind === 'root' ? 100 : 10;
   return {
     total: contribution,
     components: [{ signal: reason.kind, raw: contribution, normalized: contribution / 100, weight: 1, contribution, evidenceIds: [] }],
@@ -108,6 +108,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
   const visible = new Set(roots);
   const retainedContext = new Set<string>();
   const reasons = new Map<string, InclusionReason>(roots.map((id) => [id, { kind: 'root', detail: id === request.activeNodeId ? 'Selected focal node.' : 'Required projection root.' }]));
+  const scores = new Map<string, CandidateExplanation>();
   const frontiers = new Map<string, FrontierGroup>();
   const traversalEdgeIds = new Set<string>();
   const candidateIds = new Set<string>(roots);
@@ -120,7 +121,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
     let cursor = 0;
     while (cursor < queue.length) {
       const current = queue[cursor++];
-      const grouped = new Map<string, { edge: SysEdge; node: SysNode; nextDepth: number }[]>();
+      const grouped = new Map<string, Array<RelevanceCandidate & { nextDepth: number; score: CandidateExplanation }>>();
       for (const edgeId of index.adjacentByNode.get(current.id) ?? []) {
         const edge = index.edgeById.get(edgeId);
         if (!edge || !allowedKinds.has(edge.kind)) continue;
@@ -134,7 +135,9 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
         candidateIds.add(neighborId);
         const key = category(edge, direction);
         const group = grouped.get(key) ?? [];
-        group.push({ edge, node, nextDepth: current.depth + semanticCost(edge, index, definition) });
+        const nextDepth = current.depth + semanticCost(edge, index, definition);
+        const relevance = { node, edge, fromNodeId: current.id, semanticDepth: nextDepth };
+        group.push({ ...relevance, nextDepth, score: scoreCandidate(index, definition, relevance) });
         grouped.set(key, group);
       }
 
@@ -143,7 +146,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
         const pages = Math.max(0, expansions[id] ?? 0);
         const ordered = candidates
           .filter((candidate, candidateIndex, all) => all.findIndex((item) => item.node.id === candidate.node.id) === candidateIndex)
-          .sort((a, b) => a.nextDepth - b.nextDepth || a.node.label.localeCompare(b.node.label) || a.node.id.localeCompare(b.node.id));
+          .sort(compareCandidates);
         const withinDepth = ordered.filter((candidate) => candidate.nextDepth <= limit);
         const beyondDepth = ordered.filter((candidate) => candidate.nextDepth > limit);
         const eligible = [...withinDepth, ...(pages > 0 ? beyondDepth : [])];
@@ -155,6 +158,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
           traversalEdgeIds.add(candidate.edge.id);
           if (candidate.nextDepth === 0) retainedContext.add(candidate.node.id);
           reasons.set(candidate.node.id, { kind: 'traversal', direction, semanticDepth: candidate.nextDepth, viaEdgeId: candidate.edge.id, fromNodeId: current.id, detail: `${direction} via ${candidate.edge.kind} at semantic depth ${candidate.nextDepth}.` });
+          scores.set(candidate.node.id, candidate.score);
           const previous = best.get(candidate.node.id);
           if (previous === undefined || candidate.nextDepth < previous) {
             best.set(candidate.node.id, candidate.nextDepth);
@@ -175,7 +179,8 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
 
   const realNodes: VisibleNode[] = index.nodes.filter((node) => visible.has(node.id)).map((node) => {
     const reason = reasons.get(node.id) ?? { kind: 'root' as const, detail: 'Required projection root.' };
-    return { kind: 'real', id: node.id, node, reason, score: explanation(reason) };
+    const score = scores.get(node.id) ?? explanation(reason as Extract<InclusionReason, { kind: 'root' | 'overview' }>);
+    return { kind: 'real', id: node.id, node, reason, score };
   });
   const visibleFrontiers = [...frontiers.values()].sort((a, b) => a.id.localeCompare(b.id)).slice(0, Math.max(0, hardBudget - realNodes.length));
   if (frontiers.size > visibleFrontiers.length) warnings.push({ code: 'hard-budget', message: `${frontiers.size - visibleFrontiers.length} frontier controls were omitted by the hard budget.` });

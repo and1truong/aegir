@@ -1,5 +1,5 @@
 import type { EvidenceRecord, SysEdge, SysNode } from '../data/types';
-import type { GraphIndex } from './types';
+import type { GraphIndex, GraphIndexFacts } from './types';
 
 function append(map: Map<string, string[]>, id: string, edgeId: string) {
   const values = map.get(id) ?? [];
@@ -7,7 +7,7 @@ function append(map: Map<string, string[]>, id: string, edgeId: string) {
   map.set(id, values);
 }
 
-export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysEdge[], evidence: readonly EvidenceRecord[] = []): GraphIndex {
+export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysEdge[], evidence: readonly EvidenceRecord[] = [], facts: GraphIndexFacts = {}): GraphIndex {
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const edgeById = new Map<string, SysEdge>();
   const incomingByNode = new Map<string, string[]>();
@@ -43,6 +43,8 @@ export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysE
   sort(incomingByNode);
   sort(outgoingByNode);
   sort(adjacentByNode);
+  const fanInByNode = new Map(nodes.map((node) => [node.id, incomingByNode.get(node.id)?.length ?? 0]));
+  const fanOutByNode = new Map(nodes.map((node) => [node.id, outgoingByNode.get(node.id)?.length ?? 0]));
 
   return {
     nodes: [...nodes],
@@ -55,5 +57,9 @@ export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysE
     membership: new Map(nodes.map((node) => [node.id, { service: node.service, pkg: node.pkg, owner: node.owner }])),
     evidenceById,
     evidenceBySubject,
+    fanInByNode,
+    fanOutByNode,
+    telemetryByNode: new Map((facts.telemetry ?? []).map((item) => [item.nodeId, item])),
+    findingNodeIds: new Set(facts.findingNodeIds ?? []),
   };
 }

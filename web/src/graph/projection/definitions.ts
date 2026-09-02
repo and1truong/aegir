@@ -17,6 +17,7 @@ function definition(id: string, label: string, kinds: EdgeKind[], layoutStrategy
     relationshipPolicy,
     defaultDepth: { upstream: 1, downstream: 2 },
     layoutStrategy,
+    relevanceWeights: { change: 9, direct: 8, runtime: 5, contract: 5, failure: 4, ownership: 3, architecture: 3, structural: 1 },
   };
 }
 

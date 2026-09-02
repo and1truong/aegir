@@ -13,6 +13,8 @@ import { GraphScopeControls, type ExpandedBranch } from './GraphScopeControls';
 import { projectGraphIndex, projectPRGraphIndex, type BranchExpansions } from '../lib/graphProjection';
 import { useInvestigation } from '../investigation/InvestigationContext';
 import { enabledRelationships as deriveEnabledRelationships, legacyBranchExpansions } from '../investigation/reducer';
+import { reconcileMissingFocal } from '../investigation/history';
+import { InvestigationBreadcrumbs } from '../investigation/InvestigationBreadcrumbs';
 import { createGraphIndex } from '../graph/index';
 import { evidenceForEdge, formatEvidenceLocation } from '../graph/evidence';
 import { projectionDefinitions, questionProjectionIds, signalProjectionIds } from '../graph/projection/definitions';
@@ -240,6 +242,10 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
   }, [graph.nodes, graph.edges, graph.visibleGraph.nodes, mode, coverage, complexity, telemetry, violations, snapshot, contractDiff]);
 
   const selectedNode = nodes.find((node) => node.id === selected);
+  useEffect(() => {
+    if (!selected || nodes.length === 0 || nodes.some((node) => node.id === selected)) return;
+    dispatch({ type: 'reconcileFocalNode', nodeId: reconcileMissingFocal(investigation, new Set(nodes.map((node) => node.id)), graph.visibleGraph.rootNodeIds[0] ?? nodes[0]?.id) });
+  }, [selected, nodes, investigation, graph.visibleGraph.rootNodeIds, dispatch]);
   const modeNodes = mode === 'contracts' ? nodes.filter((node) => node.kind === 'contract') : mode === 'lint' ? nodes.filter((node) => violations.some((violation) => violation.primaryNode === node.id || violation.path.includes(node.id))) : nodes;
   const filtered = modeNodes.filter((node) => !query || `${node.label} ${node.file ?? ''}`.toLowerCase().includes(query.toLowerCase())).slice(0, 300);
   const selectGraphNode = (id: string) => {
@@ -271,6 +277,7 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
         <button onClick={() => setFocusMode(true)} aria-label="Enter focus mode" title="Focus mode" className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><Maximize2 className="h-3.5 w-3.5" /></button>
       </div>}
       {!focusMode && projectionDefinitions[mode]?.category === 'question' && <div className="flex items-center gap-3 border-b border-zinc-800 bg-sky-950/10 px-3 py-1.5 text-[10.5px]"><span className="font-semibold text-sky-200">{projectionDefinitions[mode].label}</span><span className="text-zinc-500">{projectionDefinitions[mode].description}</span>{graph.visibleGraph.warnings.map((warning) => <span key={`${warning.code}:${warning.message}`} className="ml-auto text-amber-300">{warning.message}</span>)}</div>}
+      {!focusMode && <InvestigationBreadcrumbs nodes={nodes} />}
       {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS[mode]} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}
       <div className="flex min-h-0 flex-1">
         {!focusMode && <aside className="flex w-[250px] shrink-0 flex-col border-r border-zinc-800">
@@ -408,6 +415,10 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   useEffect(() => {
     if (selectedEdgeId && !selectedEdge) dispatch({ type: 'selectEntity', entity: selected ? { kind: 'node', id: selected } : null });
   }, [selectedEdgeId, selectedEdge, selected, dispatch]);
+  useEffect(() => {
+    if (!review || !selected || review.nodes.some((node) => node.id === selected)) return;
+    dispatch({ type: 'reconcileFocalNode', nodeId: reconcileMissingFocal(investigation, new Set(review.nodes.map((node) => node.id)), graph.visibleGraph.rootNodeIds[0] ?? review.nodes[0]?.id) });
+  }, [review, selected, investigation, graph.visibleGraph.rootNodeIds, dispatch]);
   if (!review) return <div className="flex h-full items-center justify-center p-6"><div className="w-full max-w-[580px] rounded-lg border border-zinc-800 bg-zinc-900/30 p-5"><GitCompare className="h-6 w-6 text-violet-300" /><h1 className="mt-3 text-[16px] font-semibold">Review local Git changes</h1><p className="mt-1 text-[11px] text-zinc-500">Aegir archives the base ref read-only, compares it with another ref or the current working tree, and persists an evidence-backed graph review.</p><ReviewForm baseRef={baseRef} headRef={headRef} setBaseRef={setBaseRef} setHeadRef={setHeadRef} run={run} loading={loading} /><>{error && <div className="mt-3 text-[11px] text-red-300">{error}</div>}</></div></div>;
   const statusMaps = deltaStatusMaps(delta);
   const decor: GraphDecor = { tone: {}, badges: {}, edgeTone: {}, edgeLabel: {}, dimmed: new Set(), edgeDimmed: new Set() };
@@ -442,6 +453,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
         <div className="mt-3 flex gap-5 font-mono text-[10px] text-zinc-400"><span className="text-emerald-300">+{review.summary.addedNodes} nodes</span><span className="text-red-300">−{review.summary.removedNodes} nodes</span><span>{review.summary.modifiedNodes} modified</span><span>{review.summary.addedEdges} added edges</span><span>{review.summary.newViolations} new violations</span><span>{review.contractDiff.changes.length} contract changes</span><span>{graph.nodes.length} visible</span></div>
         {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
       </header>}
+      {!focusMode && <InvestigationBreadcrumbs nodes={review.nodes} />}
       {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS.impact} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, review.nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}
       <div className={cn('grid min-h-0 flex-1', !focusMode && inspectorOpen ? 'grid-cols-[1fr_360px]' : 'grid-cols-1')}>
         <div className="relative min-w-0"><SystemGraph nodes={graph.nodes} edges={graph.edges} frontiers={graph.aggregates} decor={decor} selected={selected} selectedEdge={selectedEdgeId} onSelect={selectGraphNode} onEdgeSelect={(id) => dispatch({ type: 'selectEntity', entity: { kind: 'edge', id } })} onDoubleClick={selectGraphNode} anchorNodeId={selected ?? graph.visibleGraph.rootNodeIds[0]} topologyRevision={graph.visibleGraph.revision} layoutStrategy="review-LR" minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</div>

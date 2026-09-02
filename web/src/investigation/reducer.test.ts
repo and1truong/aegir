@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createHistory, goBack, goForward, pushHistory, replaceHistory } from './history.ts';
+import { createHistory, deserializeHistory, goBack, goForward, pushHistory, reconcileMissingFocal, recordInvestigationAction, replaceHistory, serializeHistory } from './history.ts';
 import { enabledRelationships, investigationReducer, legacyBranchExpansions } from './reducer.ts';
 import { createInvestigationState } from './types.ts';
 
@@ -62,4 +62,40 @@ test('history pushes navigation, replaces refinements, and supports back and for
   assert.equal(history.current.focalNodeId, 'second');
   assert.equal(history.current.depth.downstream, 3);
   assert.equal(history.current.selectedEntity, null);
+});
+
+test('history action policy replaces refinements and truncates forward navigation', () => {
+  let history = createHistory(createInvestigationState());
+  history = recordInvestigationAction(history, { type: 'setFocalNode', nodeId: 'a' });
+  history = recordInvestigationAction(history, { type: 'setDepth', direction: 'downstream', depth: 3 });
+  assert.equal(history.back.length, 1);
+  history = recordInvestigationAction(history, { type: 'setFocalNode', nodeId: 'b' });
+  history = goBack(history);
+  assert.equal(history.current.focalNodeId, 'a');
+  history = recordInvestigationAction(history, { type: 'setProjection', projectionId: 'runtime' });
+  assert.equal(history.forward.length, 0);
+  assert.equal(history.current.depth.downstream, 3);
+});
+
+test('history is bounded, serializable, and resets at repository boundaries', () => {
+  let history = createHistory(createInvestigationState({ contextKey: 'snapshot:a' }));
+  for (let index = 0; index < 60; index++) history = recordInvestigationAction(history, { type: 'setFocalNode', nodeId: `node-${index}` });
+  assert.equal(history.back.length, 50);
+  const restored = deserializeHistory(serializeHistory(history), createInvestigationState());
+  assert.equal(restored.current.focalNodeId, 'node-59');
+  history = recordInvestigationAction(history, { type: 'resetContext', contextKey: 'snapshot:b' });
+  assert.equal(history.back.length, 0);
+  assert.equal(history.current.focalNodeId, undefined);
+});
+
+test('missing focal fallback prefers locked path, then pin, then root', () => {
+  const state = createInvestigationState();
+  state.focalNodeId = 'deleted';
+  state.lockedPath = { id: 'path', nodeIds: ['also-deleted', 'locked'], edgeIds: [] };
+  state.pinnedNodeIds = ['pinned'];
+  assert.equal(reconcileMissingFocal(state, new Set(['locked', 'pinned', 'root']), 'root'), 'locked');
+  state.lockedPath = undefined;
+  assert.equal(reconcileMissingFocal(state, new Set(['pinned', 'root']), 'root'), 'pinned');
+  state.pinnedNodeIds = [];
+  assert.equal(reconcileMissingFocal(state, new Set(['root']), 'root'), 'root');
 });

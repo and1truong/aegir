@@ -5,6 +5,7 @@ import { createInvestigationState, type InvestigationState, type ProjectionId, t
 export type InvestigationAction =
   | { type: 'resetContext'; contextKey: string; projectionId?: ProjectionId }
   | { type: 'setFocalNode'; nodeId?: string }
+  | { type: 'reconcileFocalNode'; nodeId?: string }
   | { type: 'selectEntity'; entity: InvestigationState['selectedEntity'] }
   | { type: 'setProjection'; projectionId: ProjectionId }
   | { type: 'setDepth'; direction: 'upstream' | 'downstream'; depth: ProjectionDepth }
@@ -20,6 +21,7 @@ export function investigationReducer(state: InvestigationState, action: Investig
       if (state.contextKey === action.contextKey && (!action.projectionId || state.projectionId === action.projectionId)) return state;
       return createInvestigationState({ contextKey: action.contextKey, projectionId: action.projectionId ?? state.projectionId });
     case 'setFocalNode':
+    case 'reconcileFocalNode':
       return {
         ...state,
         focalNodeId: action.nodeId,

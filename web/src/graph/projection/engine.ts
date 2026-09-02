@@ -1,4 +1,4 @@
-import type { EdgeKind, NodeKind, SysEdge } from '../../data/types';
+import type { EdgeKind, NodeKind, SysEdge, SysNode } from '../../data/types';
 import type { CandidateExplanation, EvidencePolicy, FrontierGroup, GraphIndex, InclusionReason, ProjectionDefinition, ProjectionDepth, ProjectionDirection, VisibleEdge, VisibleGraph, VisibleNode } from '../types';
 import { compareCandidates, scoreCandidate, type RelevanceCandidate } from './relevance.ts';
 import { groupFrontierCandidates } from './grouping.ts';
@@ -138,6 +138,15 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
     const limit = maxDepth(depth);
     const best = new Map<string, number>(roots.map((id) => [id, 0]));
     const queue = roots.map((id) => ({ id, depth: 0 }));
+    const withinCapacity = <T extends { node: SysNode }>(candidates: T[], newNodeLimit: number) => {
+      let newNodes = 0;
+      return candidates.filter((candidate) => {
+        if (visible.has(candidate.node.id)) return true;
+        if (newNodes >= newNodeLimit) return false;
+        newNodes += 1;
+        return true;
+      });
+    };
     let cursor = 0;
     while (cursor < queue.length) {
       const current = queue[cursor++];
@@ -173,7 +182,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
         const eligible = [...withinDepth, ...(pages > 0 ? beyondDepth : [])];
         const groupLimit = branchLimit + pages * branchPageSize;
         const remaining = Math.max(0, Math.min(directionLimit, nodeBudget) - visible.size);
-        let selected = eligible.slice(0, Math.min(groupLimit, remaining));
+        let selected = withinCapacity(eligible, Math.min(groupLimit, remaining));
         const hasMembership = ordered.some((candidate) => {
           const membership = index.membership.get(candidate.node.id);
           return membership?.service || membership?.pkg || membership?.owner;
@@ -199,7 +208,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
               selected.push(...members);
             }
           }
-          selected = selected.filter((candidate) => candidate.nextDepth <= limit || Object.values(expansions).some((value) => value > 0)).sort(compareCandidates).slice(0, remaining);
+          selected = withinCapacity(selected.filter((candidate) => candidate.nextDepth <= limit || Object.values(expansions).some((value) => value > 0)).sort(compareCandidates), remaining);
         }
         for (const candidate of selected) {
           visible.add(candidate.node.id);
@@ -214,7 +223,8 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
           }
         }
         const hierarchical = ordered.length > branchLimit && hasMembership;
-        const hidden = hierarchical ? [] : ordered.slice(selected.length);
+        const selectedIds = new Set(selected.map((candidate) => candidate.node.id));
+        const hidden = hierarchical ? [] : ordered.filter((candidate) => !selectedIds.has(candidate.node.id));
         if (hidden.length > 0) {
           const relationMix: Partial<Record<EdgeKind, number>> = {};
           hidden.forEach((candidate) => { relationMix[candidate.edge.kind] = (relationMix[candidate.edge.kind] ?? 0) + 1 });

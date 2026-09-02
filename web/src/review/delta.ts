@@ -1,4 +1,4 @@
-import type { GraphDelta, GraphDeltaStatus, GraphEdgeDelta, GraphNodeDelta, SysEdge, SysNode } from '../data/types.ts';
+import type { EvidenceRecord, GraphDelta, GraphDeltaStatus, GraphEdgeDelta, GraphNodeDelta, SysEdge, SysNode } from '../data/types.ts';
 
 export type ReviewGraphPolicy = 'changes-only' | 'changes-impact' | 'blast-radius';
 
@@ -6,6 +6,7 @@ interface DeltaReviewLike {
   payloadVersion?: number;
   nodes: SysNode[];
   edges: SysEdge[];
+  evidence?: EvidenceRecord[];
   delta?: GraphDelta;
 }
 
@@ -52,45 +53,43 @@ function bodyWithStatus<T extends SysNode | SysEdge>(body: T, status: GraphDelta
   return { ...body, pr: status === 'unchanged' ? undefined : status };
 }
 
-export function graphForReviewPolicy(review: DeltaReviewLike, delta: GraphDelta, policy: ReviewGraphPolicy) {
-  if (policy !== 'changes-only') return { nodes: review.nodes, edges: review.edges };
+export function graphForReviewPolicy(review: DeltaReviewLike, delta: GraphDelta, policy: ReviewGraphPolicy, options?: { exactSource?: boolean }) {
+  if (policy !== 'changes-only') return { nodes: review.nodes, edges: review.edges, evidence: review.evidence };
   const nodeById = new Map(review.nodes.map((node) => [node.id, node]));
+  const edgeById = new Map(review.edges.map((edge) => [edge.id, edge]));
   const changedEdges = delta.edges.flatMap((entry) => {
-    const body = entry.after ?? entry.before;
-    return body ? [bodyWithStatus(body, entry.status)] : [];
+    const body = options?.exactSource ? edgeById.get(entry.id) : entry.after ?? entry.before;
+    return body ? [options?.exactSource ? body : bodyWithStatus(body, entry.status)] : [];
   });
   const requiredNodeIds = new Set(delta.nodes.map((entry) => entry.id));
   changedEdges.forEach((edge) => { requiredNodeIds.add(edge.source); requiredNodeIds.add(edge.target) });
   const changedNodeById = new Map(delta.nodes.flatMap((entry) => {
-    const body = entry.after ?? entry.before;
-    return body ? [[entry.id, bodyWithStatus(body, entry.status)] as const] : [];
+    const body = options?.exactSource ? nodeById.get(entry.id) : entry.after ?? entry.before;
+    return body ? [[entry.id, options?.exactSource ? body : bodyWithStatus(body, entry.status)] as const] : [];
   }));
   const nodes = [...requiredNodeIds].flatMap((id) => {
     const node = changedNodeById.get(id) ?? nodeById.get(id);
     return node ? [node] : [];
   }).sort((a, b) => a.id.localeCompare(b.id));
-  return { nodes, edges: changedEdges.sort((a, b) => a.id.localeCompare(b.id)) };
+  return { nodes, edges: changedEdges.sort((a, b) => a.id.localeCompare(b.id)), evidence: review.evidence };
 }
 
-export function graphForReviewSnapshot(review: DeltaReviewLike, delta: GraphDelta, side: 'base' | 'head', archived?: { nodes: SysNode[]; edges: SysEdge[] }) {
-  const nodeDelta = new Map(delta.nodes.map((entry) => [entry.id, entry]));
-  const edgeDelta = new Map(delta.edges.map((entry) => [entry.id, entry]));
-  const archivedNodes = new Map(archived?.nodes.map((node) => [node.id, node]));
-  const archivedEdges = new Map(archived?.edges.map((edge) => [edge.id, edge]));
-  const nodes = review.nodes.flatMap((node) => {
-    const entry = nodeDelta.get(node.id);
-    const selected = entry ? (side === 'base' ? entry.before : entry.after) : node;
-    const body = selected ?? (entry?.status === 'modified' ? archivedNodes.get(node.id) ?? node : undefined);
-    return body ? [{ ...body, pr: undefined }] : [];
-  });
-  const edges = review.edges.flatMap((edge) => {
-    const entry = edgeDelta.get(edge.id);
-    const selected = entry ? (side === 'base' ? entry.before : entry.after) : edge;
-    const body = selected ?? (entry?.status === 'modified' ? archivedEdges.get(edge.id) ?? edge : undefined);
-    return body ? [{ ...body, pr: undefined }] : [];
-  });
+export function graphForReviewSnapshot(review: DeltaReviewLike, delta: GraphDelta, side: 'base' | 'head', archived?: { nodes: SysNode[]; edges: SysEdge[]; evidence?: EvidenceRecord[] }) {
+  const nodes = new Map((archived?.nodes ?? review.nodes).map((node) => [node.id, node]));
+  const edges = new Map((archived?.edges ?? review.edges).map((edge) => [edge.id, edge]));
+  for (const entry of delta.nodes) {
+    const selected = side === 'base' ? entry.before : entry.after;
+    if (selected) nodes.set(entry.id, selected);
+    else if ((side === 'base' && entry.status === 'added') || (side === 'head' && entry.status === 'removed')) nodes.delete(entry.id);
+  }
+  for (const entry of delta.edges) {
+    const selected = side === 'base' ? entry.before : entry.after;
+    if (selected) edges.set(entry.id, selected);
+    else if ((side === 'base' && entry.status === 'added') || (side === 'head' && entry.status === 'removed')) edges.delete(entry.id);
+  }
   return {
-    nodes: nodes.sort((left, right) => left.id.localeCompare(right.id)),
-    edges: edges.sort((left, right) => left.id.localeCompare(right.id)),
+    nodes: [...nodes.values()].map((node) => ({ ...node, pr: undefined })).sort((left, right) => left.id.localeCompare(right.id)),
+    edges: [...edges.values()].map((edge) => ({ ...edge, pr: undefined })).sort((left, right) => left.id.localeCompare(right.id)),
+    evidence: archived?.evidence ?? review.evidence,
   };
 }

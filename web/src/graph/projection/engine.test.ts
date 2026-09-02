@@ -121,6 +121,13 @@ test('pins reserve visible budget independently of the focal traversal', () => {
   assert.ok(graph.revision.includes('pins:reference'));
 });
 
+test('shared directional candidates do not consume free unique-node slots', () => {
+  const nodes = [node('root'), node('b'), node('c')];
+  const edges = [edge('b', 'root'), edge('root', 'b'), edge('root', 'c')];
+  const graph = projectVisibleGraph(createGraphIndex(nodes, edges), projectionDefinition('dependencies'), { activeNodeId: 'root', upstreamDepth: 1, downstreamDepth: 1, nodeBudget: 3 });
+  assert.deepEqual(realIds(graph), ['root', 'b', 'c']);
+});
+
 test('locked paths reserve ordered entities and expose stale segments', () => {
   const nodes = [node('root'), node('middle'), node('target'), node('noise')];
   const edges = [edge('root', 'middle'), edge('middle', 'target'), edge('root', 'noise')];

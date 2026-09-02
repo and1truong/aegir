@@ -47,3 +47,26 @@ test('keeps legacy modified bodies when the base side was not retained', () => {
   assert.equal(graph.nodes.find((node) => node.id === 'a')?.label, 'Base A');
   assert.equal(graph.edges[0].label, 'base call');
 });
+
+test('uses the full archived graph and evidence for snapshot sides', () => {
+  const review = { nodes: nodes.slice(0, 2), edges: edges.slice(0, 1), evidence: [] };
+  const delta = { nodes: [{ id: 'a', status: 'modified' as const, before: { ...nodes[0], label: 'Before' }, after: { ...nodes[0], label: 'After' }, changeReasons: [] }], edges: [] };
+  const archived = {
+    nodes,
+    edges,
+    evidence: [{ id: 'archived', source: 'CODE' as const, strength: 'proven' as const, subject: { kind: 'edge' as const, id: edges[1].id }, summary: 'Archived evidence' }],
+  };
+  const graph = graphForReviewSnapshot(review, delta, 'base', archived);
+  assert.deepEqual(graph.nodes.map((node) => node.id), ['a', 'b', 'c']);
+  assert.deepEqual(graph.edges.map((edge) => edge.id), ['a|calls|b', 'b|calls|c']);
+  assert.deepEqual(graph.evidence?.map((record) => record.id), ['archived']);
+  assert.equal(graph.nodes[0].label, 'Before');
+});
+
+test('applies changes-only policy to entities present on an exact snapshot side', () => {
+  const baseNodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A' }, { id: 'b', kind: 'function', label: 'B' }];
+  const delta = { nodes: [], edges: [{ id: edges[0].id, status: 'added' as const, after: edges[0], changeReasons: [] }] };
+  const graph = graphForReviewPolicy({ nodes: baseNodes, edges: [] }, delta, 'changes-only', { exactSource: true });
+  assert.deepEqual(graph.nodes, []);
+  assert.deepEqual(graph.edges, []);
+});

@@ -53,6 +53,7 @@ export function recordInvestigationAction(history: InvestigationHistory, action:
   if (action.type === 'setFocalNode' && next.focalNodeId !== history.current.focalNodeId) return pushHistory(history, next);
   if (action.type === 'setProjection') return pushHistory(history, next);
   if (action.type === 'setAbstraction') return pushHistory(history, next);
+  if (action.type === 'hydrateView') return pushHistory(history, next);
   return replaceHistory(history, next);
 }
 

@@ -121,3 +121,12 @@ test('path locking copies ordered state and unlock restores the projection state
   assert.equal(unlocked.projectionId, before.projectionId);
   assert.deepEqual(unlocked.depth, before.depth);
 });
+
+test('saved-view hydration is an undoable navigation event', () => {
+  const initial = createInvestigationState({ contextKey: 'snapshot:a' });
+  const saved = { ...initial, projectionId: 'runtime', focalNodeId: 'runtime-root' };
+  const history = recordInvestigationAction(createHistory(initial), { type: 'hydrateView', state: saved });
+  assert.equal(history.current.projectionId, 'runtime');
+  assert.equal(history.back.length, 1);
+  assert.equal(goBack(history).current.projectionId, 'dependencies');
+});

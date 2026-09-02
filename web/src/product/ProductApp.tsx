@@ -21,6 +21,8 @@ import { evidenceForEdge, formatEvidenceLocation } from '../graph/evidence';
 import { projectionDefinitions, questionProjectionIds, signalProjectionIds } from '../graph/projection/definitions';
 import { adaptGraphDelta, deltaStatusMaps, graphForReviewPolicy, type ReviewGraphPolicy } from '../review/delta';
 import { pathQueryDefinitions, runPathQuery, type PathQueryId, type PathQueryResult, type SemanticPath } from '../path/query';
+import { LocalStorageSavedViewRepository } from '../savedViews/repository';
+import { hydrateSavedView, type SavedView } from '../savedViews/schema';
 
 type Screen = 'overview' | 'explorer' | 'pulls' | 'rules' | 'search' | 'settings';
 type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint' | 'what-can-break' | 'hot-path' | 'state-mutation' | 'retry-paths' | 'transaction-boundaries' | 'cross-team-dependencies' | 'what-changed-architecturally';
@@ -140,6 +142,18 @@ function PathQueryBar({ nodes, sourceId, targetId, queryId, result, activePath, 
   </div>;
 }
 
+function SavedViewsBar({ views, name, selectedId, status, setName, setSelectedId, save, load, remove }: { views: SavedView[]; name: string; selectedId: string; status: string; setName: (name: string) => void; setSelectedId: (id: string) => void; save: () => void; load: () => void; remove: () => void }) {
+  return <div className="flex min-h-8 items-center gap-2 border-b border-zinc-800 bg-emerald-950/10 px-3 py-1">
+    <span className="text-[9px] font-semibold uppercase tracking-wider text-emerald-500">Saved views</span>
+    <input aria-label="Saved view name" value={name} onChange={(event) => setName(event.target.value)} placeholder="View name" className="h-6 w-[130px] rounded border border-zinc-800 bg-zinc-950 px-1.5 text-[10px] text-zinc-300 outline-none" />
+    <button onClick={save} disabled={!name.trim()} className="h-6 rounded border border-emerald-900 px-2 text-[9px] text-emerald-300 disabled:opacity-40">Save current</button>
+    <select aria-label="Saved view" value={selectedId} onChange={(event) => setSelectedId(event.target.value)} className="h-6 max-w-[180px] rounded border border-zinc-800 bg-zinc-950 px-1.5 text-[10px] text-zinc-300"><option value="">Choose view…</option>{views.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}</select>
+    <button onClick={load} disabled={!selectedId} className="h-6 rounded border border-zinc-700 px-2 text-[9px] text-zinc-300 disabled:opacity-40">Load</button>
+    <button onClick={remove} disabled={!selectedId} className="h-6 px-1 text-[9px] text-zinc-500 disabled:opacity-40">Delete</button>
+    {status && <span className="ml-auto truncate text-[9.5px] text-amber-300">{status}</span>}
+  </div>;
+}
+
 interface GraphViewProps {
   theme: 'light' | 'dark';
   focusMode: boolean;
@@ -162,6 +176,11 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [pathQueryId, setPathQueryId] = useState<PathQueryId>('semantic-dependency');
   const [pathResult, setPathResult] = useState<PathQueryResult>();
   const [selectedPathIndex, setSelectedPathIndex] = useState(0);
+  const savedViewRepository = useMemo(() => new LocalStorageSavedViewRepository(window.localStorage), []);
+  const [savedViews, setSavedViews] = useState(() => savedViewRepository.list());
+  const [savedViewName, setSavedViewName] = useState('Investigation');
+  const [selectedSavedViewId, setSelectedSavedViewId] = useState('');
+  const [savedViewStatus, setSavedViewStatus] = useState('');
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [contractDiff, setContractDiff] = useState<ContractDiff>();
   const nodes = snapshot?.nodes ?? [];
@@ -183,6 +202,7 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
     setContractDiff(undefined);
     setPathResult(undefined);
     setPathTargetId('');
+    setSavedViewStatus('');
   }, [active?.id, snapshot?.id, dispatch]);
   useEffect(() => { setPathResult(undefined); setSelectedPathIndex(0) }, [projectedSelected, pathQueryId, investigation.evidencePolicy.maximumLevel, investigation.evidencePolicy.includeStale]);
   useEffect(() => {
@@ -323,6 +343,7 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
       </div>}
       {!focusMode && projectionDefinitions[mode]?.category === 'question' && <div className="flex items-center gap-3 border-b border-zinc-800 bg-sky-950/10 px-3 py-1.5 text-[10.5px]"><span className="font-semibold text-sky-200">{projectionDefinitions[mode].label}</span><span className="text-zinc-500">{projectionDefinitions[mode].description}</span>{graph.visibleGraph.warnings.map((warning) => <span key={`${warning.code}:${warning.message}`} className="ml-auto text-amber-300">{warning.message}</span>)}</div>}
       {!focusMode && <InvestigationBreadcrumbs nodes={nodes} />}
+      {!focusMode && <SavedViewsBar views={savedViews} name={savedViewName} selectedId={selectedSavedViewId} status={savedViewStatus} setName={setSavedViewName} setSelectedId={setSelectedSavedViewId} save={() => { try { const saved = savedViewRepository.save(savedViewName, investigation); setSavedViews(savedViewRepository.list()); setSelectedSavedViewId(saved.id); setSavedViewStatus(`Saved “${saved.name}”.`) } catch (error) { setSavedViewStatus(error instanceof Error ? error.message : 'Could not save view.') } }} load={() => { const view = savedViews.find((item) => item.id === selectedSavedViewId); if (!view) return; const restored = hydrateSavedView(view, investigation.contextKey, new Set(canonicalGraphIndex.nodeById.keys()), new Set(canonicalGraphIndex.edgeById.keys())); dispatch({ type: 'hydrateView', state: restored.state }); setPathResult(undefined); setSelectedPathIndex(0); setSavedViewStatus(restored.warnings.length ? restored.warnings.map((warning) => warning.message).join(' ') : `Loaded “${view.name}”.`) }} remove={() => { try { savedViewRepository.remove(selectedSavedViewId); setSavedViews(savedViewRepository.list()); setSelectedSavedViewId(''); setSavedViewStatus('Deleted saved view.') } catch (error) { setSavedViewStatus(error instanceof Error ? error.message : 'Could not delete view.') } }} />}
       {!focusMode && <PathQueryBar nodes={graphIndex.nodes} sourceId={projectedSelected} targetId={pathTargetId} queryId={pathQueryId} result={pathResult} activePath={activePath} locked={Boolean(investigation.lockedPath)} alternateCount={investigation.lockedPath?.alternateCount ?? pathResult?.alternatives.length ?? 0} selectedPath={selectedPathIndex} setTargetId={(id) => { setPathTargetId(id); setPathResult(undefined); setSelectedPathIndex(0) }} setQueryId={setPathQueryId} choosePath={setSelectedPathIndex} run={() => { if (!projectedSelected || !pathTargetId) return; setPathResult(runPathQuery(graphIndex, { definitionId: pathQueryId, sourceNodeId: projectedSelected, targetNodeId: pathTargetId, evidencePolicy: investigation.evidencePolicy, maxAlternatives: 2 })); setSelectedPathIndex(0) }} lock={() => { const path = pathOptions[selectedPathIndex]; if (!path) return; dispatch({ type: 'lockPath', path: { id: path.id, version: 1, queryId: path.queryId, nodeIds: path.nodeIds, edgeIds: path.edgeIds, evidencePolicy: { ...investigation.evidencePolicy }, sourceNodeId: path.nodeIds[0], targetNodeId: path.nodeIds.at(-1)!, semanticHops: path.semanticHops, alternateCount: pathResult?.alternatives.length ?? 0, abstraction: investigation.abstraction } }) }} unlock={() => dispatch({ type: 'unlockPath' })} />}
       {!focusMode && <PinnedStrip nodeIds={investigation.pinnedNodeIds} nodes={nodes} unpin={(nodeId) => dispatch({ type: 'unpinNode', nodeId })} clear={() => dispatch({ type: 'clearPins' })} />}
       {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS[mode]} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} evidenceLevel={investigation.evidencePolicy.maximumLevel} includeStale={investigation.evidencePolicy.includeStale} setEvidenceLevel={(maximumLevel) => dispatch({ type: 'setEvidencePolicy', maximumLevel })} setIncludeStale={(includeStale) => dispatch({ type: 'setEvidencePolicy', includeStale })} abstraction={investigation.abstraction} setAbstraction={(abstraction) => dispatch({ type: 'setAbstraction', abstraction })} expandedBranches={expandedBranchLabels(branchExpansions, nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}

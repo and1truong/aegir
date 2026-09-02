@@ -94,3 +94,23 @@ func TestCompareModelsFindingContractAndRuntimeReasons(t *testing.T) {
 		}
 	}
 }
+
+func TestCompareModelsComplexityAndTestProtectionReasons(t *testing.T) {
+	node := analyzer.Node{ID: "handler", Kind: "function", Label: "Handler", Meta: map[string]any{"fingerprint": "same"}}
+	base := analyzer.Snapshot{Nodes: []analyzer.Node{node}, Analysis: analyzer.Analysis{
+		Complexity: []analyzer.Complexity{{NodeID: node.ID, Cyclomatic: 4, Score: 3}},
+		Coverage:   []analyzer.Coverage{{NodeID: node.ID, Status: "covered", Line: 90, Tests: []string{"test"}}},
+	}}
+	head := analyzer.Snapshot{Nodes: []analyzer.Node{node}, Analysis: analyzer.Analysis{
+		Complexity: []analyzer.Complexity{{NodeID: node.ID, Cyclomatic: 12, Score: 8}},
+		Coverage:   []analyzer.Coverage{{NodeID: node.ID, Status: "uncovered", Line: 0, Tests: []string{}}},
+	}}
+	result := Compare("repo", "base", "head", 1, 2, base, head)
+	kinds := map[string]bool{}
+	for _, reason := range result.Delta.Nodes[0].ChangeReasons {
+		kinds[reason.Kind] = true
+	}
+	if !kinds["complexity-changed"] || !kinds["test-protection-changed"] {
+		t.Fatalf("missing architecture evolution reasons: %#v", result.Delta.Nodes[0].ChangeReasons)
+	}
+}

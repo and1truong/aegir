@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -179,6 +180,21 @@ func Compare(repositoryID, baseRef, headRef string, baseID, headID int64, base, 
 			addNodeDeltaReason(&result, baseNodes, headNodes, id, ChangeReason{Kind: "runtime-changed", Detail: "Runtime measurements are no longer present in the head snapshot."})
 		}
 	}
+	baseComplexity, headComplexity := complexityMap(base.Analysis.Complexity), complexityMap(head.Analysis.Complexity)
+	for id, after := range headComplexity {
+		if before, exists := baseComplexity[id]; exists && !reflect.DeepEqual(before, after) {
+			changed[id] = true
+			addNodeDeltaReason(&result, baseNodes, headNodes, id, ChangeReason{Kind: "complexity-changed", Detail: fmt.Sprintf("Complexity score %d → %d; cyclomatic %d → %d.", before.Score, after.Score, before.Cyclomatic, after.Cyclomatic)})
+		}
+	}
+	baseCoverage, headCoverage := coverageMap(base.Analysis.Coverage), coverageMap(head.Analysis.Coverage)
+	for id, after := range headCoverage {
+		before, exists := baseCoverage[id]
+		if exists && (before.Status != after.Status || before.Line != after.Line || !reflect.DeepEqual(before.Tests, after.Tests)) {
+			changed[id] = true
+			addNodeDeltaReason(&result, baseNodes, headNodes, id, ChangeReason{Kind: "test-protection-changed", Detail: fmt.Sprintf("Test protection %s (%d tests) → %s (%d tests).", before.Status, len(before.Tests), after.Status, len(after.Tests))})
+		}
+	}
 	visible := map[string]bool{}
 	for id := range changed {
 		visible[id] = true
@@ -288,6 +304,22 @@ func edgeChangeReasons(before, after analyzer.Edge) []ChangeReason {
 		reasons = append(reasons, ChangeReason{Kind: "evidence-changed", Detail: "Relationship evidence changed.", EvidenceRefs: append([]string(nil), after.EvidenceRefs...)})
 	}
 	return reasons
+}
+
+func complexityMap(values []analyzer.Complexity) map[string]analyzer.Complexity {
+	result := map[string]analyzer.Complexity{}
+	for _, value := range values {
+		result[value.NodeID] = value
+	}
+	return result
+}
+
+func coverageMap(values []analyzer.Coverage) map[string]analyzer.Coverage {
+	result := map[string]analyzer.Coverage{}
+	for _, value := range values {
+		result[value.NodeID] = value
+	}
+	return result
 }
 
 func snapshotFingerprint(snapshot analyzer.Snapshot) string {

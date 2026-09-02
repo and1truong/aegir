@@ -8,7 +8,7 @@ import type { EdgeKind, EvidenceRecord, GraphDelta, GraphEdgeDelta, GraphNodeDel
 import { SystemGraph, type GraphDecor } from '../components/graph/SystemGraph';
 import { Badge, Btn, KindIcon, SeverityBadge } from './ui';
 import { cn } from '../utils/cn';
-import { useProduct } from './ProductContext';
+import { useProduct, type ProductSnapshot } from './ProductContext';
 import { GraphScopeControls, type ExpandedBranch } from './GraphScopeControls';
 import { projectGraphIndex, projectPRGraphIndex, type BranchExpansions } from '../lib/graphProjection';
 import { useInvestigation } from '../investigation/InvestigationContext';
@@ -26,6 +26,7 @@ import { hydrateSavedView, type SavedView } from '../savedViews/schema';
 import { CommandValidationError, planAgentPhrase, previewCommands, type CommandPreview } from '../investigation/commands';
 import { dependencyIntroduction } from '../temporal/timeline';
 import { computeStructuralAnalytics, metricDefinitions, rankStructuralHotspots } from '../analytics/structural';
+import { analyzeArchitectureEvolution, type ArchitectureEvolutionChange } from '../evolution/architecture';
 
 type Screen = 'overview' | 'explorer' | 'pulls' | 'rules' | 'search' | 'settings';
 type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint' | 'what-can-break' | 'hot-path' | 'state-mutation' | 'retry-paths' | 'transaction-boundaries' | 'cross-team-dependencies' | 'what-changed-architecturally';
@@ -461,6 +462,10 @@ function DeltaDetails({ entry }: { entry: GraphNodeDelta | GraphEdgeDelta }) {
   return <div className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone={entry.status === 'added' ? 'green' : entry.status === 'removed' ? 'red' : 'blue'}>{entry.status.toUpperCase()}</Badge><span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Change reasons</span></div>{entry.changeReasons.map((reason, index) => <div key={`${reason.kind}:${index}`} className="mt-2"><div className="font-mono text-[10px] text-zinc-300">{reason.kind}</div><div className="mt-0.5 text-[10px] leading-relaxed text-zinc-500">{reason.detail}</div></div>)}</div>;
 }
 
+function ArchitectureEvolutionBar({ changes, loading, open }: { changes: ArchitectureEvolutionChange[]; loading: boolean; open: (change: ArchitectureEvolutionChange) => void }) {
+  return <div className="flex min-h-9 items-center gap-2 overflow-x-auto border-b border-zinc-800 bg-fuchsia-950/10 px-3 py-1"><span className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-fuchsia-400">Architecture evolution</span>{loading ? <span className="text-[9.5px] text-zinc-500">Comparing canonical snapshots…</span> : changes.length ? changes.slice(0, 5).map((change) => <button key={change.id} onClick={() => open(change)} title={change.question} className="shrink-0 rounded border border-fuchsia-900/60 px-2 py-1 text-[9px] text-fuchsia-200">{change.title}</button>) : <span className="text-[9.5px] text-zinc-500">No actionable structural changes in this review scope.</span>}</div>;
+}
+
 function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const { active } = useProduct();
   const { state: investigation, dispatch } = useInvestigation();
@@ -474,6 +479,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [baseRef, setBaseRef] = useState('main');
   const [headRef, setHeadRef] = useState('WORKTREE');
   const [review, setReview] = useState<LocalReview>();
+  const [reviewSnapshots, setReviewSnapshots] = useState<{ base?: ProductSnapshot; head?: ProductSnapshot }>({});
   const [reviewPolicy, setReviewPolicy] = useState<ReviewGraphPolicy>('changes-impact');
   const [reviewSnapshotSide, setReviewSnapshotSide] = useState<'base' | 'delta' | 'head'>('delta');
   const delta = useMemo(() => review ? adaptGraphDelta(review) : { nodes: [], edges: [] }, [review]);
@@ -483,6 +489,25 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const reviewIndex = reviewAbstractionGraph.index;
   const reviewProjectedSelected = selected ? reviewAbstractionGraph.canonicalToRepresentative.get(selected) : undefined;
   const reviewProjectedPins = useMemo(() => [...new Set(investigation.pinnedNodeIds.flatMap((id) => reviewAbstractionGraph.canonicalToRepresentative.get(id) ?? []))], [investigation.pinnedNodeIds, reviewAbstractionGraph]);
+  useEffect(() => {
+    setReviewSnapshots({});
+    if (!active || !review?.baseSnapshotId || !review.headSnapshotId) return;
+    let current = true;
+    Promise.all([
+      fetch(`/api/repositories/${active.id}/graph?snapshot=${review.baseSnapshotId}`).then((response) => response.ok ? response.json() as Promise<ProductSnapshot> : Promise.reject(new Error('Base snapshot unavailable.'))),
+      fetch(`/api/repositories/${active.id}/graph?snapshot=${review.headSnapshotId}`).then((response) => response.ok ? response.json() as Promise<ProductSnapshot> : Promise.reject(new Error('Head snapshot unavailable.'))),
+    ]).then(([base, head]) => { if (current) setReviewSnapshots({ base, head }) }).catch(() => { if (current) setReviewSnapshots({}) });
+    return () => { current = false };
+  }, [active?.id, review?.baseSnapshotId, review?.headSnapshotId]);
+  const architectureEvolution = useMemo(() => {
+    if (!active || !reviewSnapshots.base || !reviewSnapshots.head) return { version: 1 as const, comparable: false, warnings: [], changes: [] };
+    const analytics = (snapshot: ProductSnapshot) => {
+      const canonical = createGraphIndex(snapshot.nodes, snapshot.edges, snapshot.evidence);
+      const abstracted = abstractGraph(canonical, investigation.abstraction).index;
+      return computeStructuralAnalytics({ repositoryId: active.id, snapshotId: snapshot.id, abstraction: investigation.abstraction, nodes: abstracted.nodes, edges: abstracted.edges });
+    };
+    return analyzeArchitectureEvolution({ delta, base: analytics(reviewSnapshots.base), head: analytics(reviewSnapshots.head) });
+  }, [active, reviewSnapshots, investigation.abstraction, delta]);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -569,6 +594,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
         {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
       </header>}
       {!focusMode && <InvestigationBreadcrumbs nodes={review.nodes} />}
+      {!focusMode && <ArchitectureEvolutionBar changes={architectureEvolution.changes} loading={!reviewSnapshots.base || !reviewSnapshots.head} open={(change) => { setReviewSnapshotSide('delta'); setReviewPolicy('changes-impact'); if (change.edgeIds[0]) dispatch({ type: 'selectEntity', entity: { kind: 'edge', id: change.edgeIds[0] } }); else if (change.nodeIds[0]) dispatch({ type: 'setFocalNode', nodeId: change.nodeIds[0] }) }} />}
       {!focusMode && <PinnedStrip nodeIds={investigation.pinnedNodeIds} nodes={review.nodes} unpin={(nodeId) => dispatch({ type: 'unpinNode', nodeId })} clear={() => dispatch({ type: 'clearPins' })} />}
       {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS.impact} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} evidenceLevel={investigation.evidencePolicy.maximumLevel} includeStale={investigation.evidencePolicy.includeStale} setEvidenceLevel={(maximumLevel) => dispatch({ type: 'setEvidencePolicy', maximumLevel })} setIncludeStale={(includeStale) => dispatch({ type: 'setEvidencePolicy', includeStale })} abstraction={investigation.abstraction} setAbstraction={(abstraction) => dispatch({ type: 'setAbstraction', abstraction })} expandedBranches={expandedBranchLabels(branchExpansions, review.nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}
       <div className={cn('grid min-h-0 flex-1', !focusMode && inspectorOpen ? 'grid-cols-[1fr_360px]' : 'grid-cols-1')}>

@@ -296,9 +296,7 @@ func (s *Store) saveSnapshot(ctx context.Context, repositoryID string, indexed a
 func saveSnapshotTx(ctx context.Context, tx *sql.Tx, repositoryID string, indexed analyzer.Snapshot, updateRepository bool) (int64, error) {
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 	statsJSON, _ := json.Marshal(indexed.Stats)
-	fingerprintBody, _ := json.Marshal(indexed)
-	fingerprintSum := sha256.Sum256(fingerprintBody)
-	fingerprint := hex.EncodeToString(fingerprintSum[:])
+	fingerprint := review.SnapshotFingerprint(indexed)
 	kind := "review"
 	isCurrent := 0
 	if updateRepository {

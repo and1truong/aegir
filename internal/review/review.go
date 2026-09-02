@@ -255,11 +255,30 @@ func Compare(repositoryID, baseRef, headRef string, baseID, headID int64, base, 
 	sort.Slice(result.Nodes, func(i, j int) bool { return result.Nodes[i].ID < result.Nodes[j].ID })
 	sort.Slice(result.Edges, func(i, j int) bool { return result.Edges[i].ID < result.Edges[j].ID })
 	sort.Slice(result.Evidence, func(i, j int) bool { return result.Evidence[i].ID < result.Evidence[j].ID })
+	sort.Slice(result.NewViolations, func(i, j int) bool { return result.NewViolations[i].ID < result.NewViolations[j].ID })
+	sort.Slice(result.ResolvedViolations, func(i, j int) bool { return result.ResolvedViolations[i].ID < result.ResolvedViolations[j].ID })
 	sort.Slice(result.Delta.Nodes, func(i, j int) bool { return result.Delta.Nodes[i].ID < result.Delta.Nodes[j].ID })
 	sort.Slice(result.Delta.Edges, func(i, j int) bool { return result.Delta.Edges[i].ID < result.Delta.Edges[j].ID })
-	sum := sha256.Sum256([]byte(repositoryID + "\x00" + snapshotFingerprint(base) + "\x00" + snapshotFingerprint(head)))
+	for index := range result.Delta.Nodes {
+		sortChangeReasons(result.Delta.Nodes[index].ChangeReasons)
+	}
+	for index := range result.Delta.Edges {
+		sortChangeReasons(result.Delta.Edges[index].ChangeReasons)
+	}
+	sum := sha256.Sum256([]byte(repositoryID + "\x00" + SnapshotFingerprint(base) + "\x00" + SnapshotFingerprint(head)))
 	result.ID = hex.EncodeToString(sum[:12])
 	return result
+}
+
+func sortChangeReasons(reasons []ChangeReason) {
+	for index := range reasons {
+		sort.Strings(reasons[index].EvidenceRefs)
+	}
+	sort.Slice(reasons, func(i, j int) bool {
+		left := reasons[i].Kind + "\x00" + reasons[i].Detail + "\x00" + strings.Join(reasons[i].EvidenceRefs, "\x00")
+		right := reasons[j].Kind + "\x00" + reasons[j].Detail + "\x00" + strings.Join(reasons[j].EvidenceRefs, "\x00")
+		return left < right
+	})
 }
 
 func addNodeDeltaReason(result *Review, baseNodes, headNodes map[string]analyzer.Node, id string, reason ChangeReason) {
@@ -336,7 +355,8 @@ func coverageMap(values []analyzer.Coverage) map[string]analyzer.Coverage {
 	return result
 }
 
-func snapshotFingerprint(snapshot analyzer.Snapshot) string {
+// SnapshotFingerprint returns the canonical content identity used by reviews and persisted snapshots.
+func SnapshotFingerprint(snapshot analyzer.Snapshot) string {
 	nodes := append([]analyzer.Node(nil), snapshot.Nodes...)
 	edges := append([]analyzer.Edge(nil), snapshot.Edges...)
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })

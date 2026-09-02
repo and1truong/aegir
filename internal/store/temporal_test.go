@@ -62,6 +62,26 @@ func TestHistoricalSnapshotsDoNotReplaceCurrentGraph(t *testing.T) {
 	}
 }
 
+func TestStoredSnapshotFingerprintCanonicalizesAnalysisOrdering(t *testing.T) {
+	value, repository := openTemporalStore(t)
+	ctx := context.Background()
+	first := temporalSnapshot("same")
+	first.Analysis.Violations = []analyzer.Violation{{ID: "a"}, {ID: "b"}}
+	second := temporalSnapshot("same")
+	second.Analysis.Violations = []analyzer.Violation{{ID: "b"}, {ID: "a"}}
+	firstSaved, err := value.SaveHistoricalSnapshot(ctx, repository.ID, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSaved, err := value.SaveHistoricalSnapshot(ctx, repository.ID, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSaved.Ref.Fingerprint != secondSaved.Ref.Fingerprint {
+		t.Fatalf("stored fingerprints differ: %s != %s", firstSaved.Ref.Fingerprint, secondSaved.Ref.Fingerprint)
+	}
+}
+
 func TestPreviousComparableSnapshotStaysInTheMatchingStream(t *testing.T) {
 	value, repository := openTemporalStore(t)
 	ctx := context.Background()

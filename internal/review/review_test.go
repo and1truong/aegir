@@ -2,6 +2,7 @@ package review
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/and1truong/aegir/internal/analyzer"
@@ -88,6 +89,28 @@ func TestCompareReviewIDCanonicalizesSnapshotOrdering(t *testing.T) {
 	secondID := Compare("repo", "base", "head", 3, 4, second, second).ID
 	if firstID != secondID {
 		t.Fatalf("review IDs differ for reordered snapshots: %s != %s", firstID, secondID)
+	}
+}
+
+func TestCompareCanonicalizesViolationReasonsAndEvidenceReferences(t *testing.T) {
+	nodes := []analyzer.Node{{ID: "a"}, {ID: "b"}}
+	head := analyzer.Snapshot{
+		Nodes: nodes,
+		Edges: []analyzer.Edge{{ID: "edge", Source: "a", Target: "b", Kind: "calls", EvidenceRefs: []string{"z", "a"}}},
+		Analysis: analyzer.Analysis{Violations: []analyzer.Violation{
+			{ID: "z", PrimaryNode: "a", Title: "Zeta"},
+			{ID: "a", PrimaryNode: "a", Title: "Alpha"},
+		}},
+	}
+	result := Compare("repo", "base", "head", 1, 2, analyzer.Snapshot{Nodes: nodes}, head)
+	if len(result.NewViolations) != 2 || result.NewViolations[0].ID != "a" || result.NewViolations[1].ID != "z" {
+		t.Fatalf("violations are not canonical: %#v", result.NewViolations)
+	}
+	if len(result.Delta.Nodes) != 1 || len(result.Delta.Nodes[0].ChangeReasons) != 2 || result.Delta.Nodes[0].ChangeReasons[0].Detail != "Alpha" || result.Delta.Nodes[0].ChangeReasons[1].Detail != "Zeta" {
+		t.Fatalf("node reasons are not canonical: %#v", result.Delta.Nodes)
+	}
+	if len(result.Delta.Edges) != 1 || len(result.Delta.Edges[0].ChangeReasons) != 1 || strings.Join(result.Delta.Edges[0].ChangeReasons[0].EvidenceRefs, ",") != "a,z" {
+		t.Fatalf("reason evidence references are not canonical: %#v", result.Delta.Edges)
 	}
 }
 

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/and1truong/aegir/internal/analyzer"
+	"github.com/and1truong/aegir/internal/attention"
+	"github.com/and1truong/aegir/internal/history"
 	"github.com/and1truong/aegir/internal/review"
 	_ "modernc.org/sqlite"
 )
@@ -146,12 +148,31 @@ CREATE TABLE IF NOT EXISTS reviews (
   head_snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
   body_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS attention_profiles (
+  snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  model_version TEXT NOT NULL,
+  window_days INTEGER NOT NULL,
+  body_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(snapshot_id,model_version,window_days)
+);
+CREATE TABLE IF NOT EXISTS change_history (
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  ref TEXT NOT NULL,
+  window_days INTEGER NOT NULL,
+  complete_from TEXT NOT NULL,
+  body_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(repository_id,ref,window_days)
+);
 CREATE INDEX IF NOT EXISTS idx_snapshots_repository ON snapshots(repository_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_nodes_snapshot_kind ON nodes(snapshot_id, kind);
 CREATE INDEX IF NOT EXISTS idx_edges_snapshot_source ON edges(snapshot_id, source);
 CREATE INDEX IF NOT EXISTS idx_edges_snapshot_target ON edges(snapshot_id, target);
 CREATE INDEX IF NOT EXISTS idx_evidence_snapshot_subject ON evidence(snapshot_id, subject_kind, subject_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_repository ON reviews(repository_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attention_profiles_snapshot ON attention_profiles(snapshot_id,model_version,window_days);
+CREATE INDEX IF NOT EXISTS idx_change_history_repository ON change_history(repository_id,ref,window_days);
 `); err != nil {
 		return err
 	}
@@ -174,6 +195,62 @@ CREATE INDEX IF NOT EXISTS idx_reviews_repository ON reviews(repository_id, crea
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_snapshots_current ON snapshots(repository_id,is_current,id DESC)`)
+	return err
+}
+
+func (s *Store) AttentionProfile(ctx context.Context, snapshotID int64, modelVersion string, windowDays int) (attention.Landscape, error) {
+	var body string
+	if err := s.db.QueryRowContext(ctx, `SELECT body_json FROM attention_profiles WHERE snapshot_id=? AND model_version=? AND window_days=?`, snapshotID, modelVersion, windowDays).Scan(&body); err != nil {
+		return attention.Landscape{}, err
+	}
+	var value attention.Landscape
+	if err := json.Unmarshal([]byte(body), &value); err != nil {
+		return attention.Landscape{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) SaveAttentionProfile(ctx context.Context, value attention.Landscape) error {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO attention_profiles(snapshot_id,model_version,window_days,body_json,created_at) VALUES(?,?,?,?,?)
+ON CONFLICT(snapshot_id,model_version,window_days) DO UPDATE SET body_json=excluded.body_json,created_at=excluded.created_at`, value.SnapshotID, value.ModelVersion, value.WindowDays, string(body), time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+func (s *Store) ChangeHistory(ctx context.Context, repositoryID, ref string, windowDays int) (history.Result, error) {
+	var body string
+	if err := s.db.QueryRowContext(ctx, `SELECT body_json FROM change_history WHERE repository_id=? AND ref=? AND window_days=?`, repositoryID, ref, windowDays).Scan(&body); err != nil {
+		return history.Result{}, err
+	}
+	var value history.Result
+	if err := json.Unmarshal([]byte(body), &value); err != nil {
+		return history.Result{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) LatestChangeHistory(ctx context.Context, repositoryID string, windowDays int) (history.Result, error) {
+	var body string
+	if err := s.db.QueryRowContext(ctx, `SELECT body_json FROM change_history WHERE repository_id=? AND window_days=? ORDER BY created_at DESC,rowid DESC LIMIT 1`, repositoryID, windowDays).Scan(&body); err != nil {
+		return history.Result{}, err
+	}
+	var value history.Result
+	if err := json.Unmarshal([]byte(body), &value); err != nil {
+		return history.Result{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) SaveChangeHistory(ctx context.Context, repositoryID string, value history.Result) error {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO change_history(repository_id,ref,window_days,complete_from,body_json,created_at) VALUES(?,?,?,?,?,?)
+ON CONFLICT(repository_id,ref,window_days) DO UPDATE SET complete_from=excluded.complete_from,body_json=excluded.body_json,created_at=excluded.created_at`, repositoryID, value.Ref, value.WindowDays, value.CompleteFrom.UTC().Format(time.RFC3339), string(body), time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 

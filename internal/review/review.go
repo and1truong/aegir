@@ -316,7 +316,7 @@ func nodeChangeReasons(before, after analyzer.Node) []ChangeReason {
 	if before.Kind != after.Kind || before.Label != after.Label || before.File != after.File || before.Description != after.Description {
 		reasons = append(reasons, ChangeReason{Kind: "field-changed", Detail: "Canonical node fields changed."})
 	}
-	if before.Service != after.Service || before.Package != after.Package {
+	if before.Service != after.Service || before.Package != after.Package || before.Owner != after.Owner {
 		reasons = append(reasons, ChangeReason{Kind: "ownership-changed", Detail: "Service or package membership changed."})
 	}
 	if strings.Join(before.Tags, "\x00") != strings.Join(after.Tags, "\x00") {

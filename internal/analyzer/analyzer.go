@@ -25,6 +25,7 @@ type Node struct {
 	Service     string         `json:"service,omitempty"`
 	Package     string         `json:"pkg,omitempty"`
 	File        string         `json:"file,omitempty"`
+	Owner       string         `json:"owner,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	Meta        map[string]any `json:"meta,omitempty"`
@@ -184,6 +185,7 @@ type indexer struct {
 	byPackage   map[string]map[string]string
 	packages    map[string]string
 	contracts   []Contract
+	owners      []codeOwnerRule
 }
 
 func stableID(kind, value string) string {
@@ -313,7 +315,7 @@ func newIndexer(root, repositoryName string) *indexer {
 	}
 	return &indexer{
 		root: root, module: readModule(root), serviceName: name, serviceID: stableID("service", name), fset: token.NewFileSet(),
-		nodes: map[string]Node{}, edges: map[string]Edge{}, evidence: map[string]EvidenceRecord{}, byPackage: map[string]map[string]string{}, packages: map[string]string{}, contracts: []Contract{},
+		nodes: map[string]Node{}, edges: map[string]Edge{}, evidence: map[string]EvidenceRecord{}, byPackage: map[string]map[string]string{}, packages: map[string]string{}, contracts: []Contract{}, owners: readCodeOwners(root),
 	}
 }
 
@@ -328,7 +330,7 @@ func (x *indexer) packageFor(dir, packageName string) string {
 	}
 	id = stableID("package", filepath.ToSlash(rel))
 	x.packages[dir] = id
-	x.nodes[id] = Node{ID: id, Kind: "package", Label: filepath.ToSlash(rel), Service: x.serviceID, File: filepath.ToSlash(rel)}
+	x.nodes[id] = Node{ID: id, Kind: "package", Label: filepath.ToSlash(rel), Service: x.serviceID, File: filepath.ToSlash(rel), Owner: ownerFor(x.owners, filepath.ToSlash(rel)+"/package.go")}
 	x.addEdge(x.serviceID, "owns", id, "contains", filepath.ToSlash(rel))
 	return id
 }
@@ -390,7 +392,7 @@ func (x *indexer) collect() error {
 				if contractErr != nil {
 					return fmt.Errorf("parse contract %s: %w", rel, contractErr)
 				}
-				n := Node{ID: contract.ID, Kind: "contract", Label: entry.Name(), File: rel, Service: x.serviceID, Description: "Discovered contract file", Meta: map[string]any{"type": typ, "fingerprint": contract.Fingerprint}}
+				n := Node{ID: contract.ID, Kind: "contract", Label: entry.Name(), File: rel, Service: x.serviceID, Owner: ownerFor(x.owners, rel), Description: "Discovered contract file", Meta: map[string]any{"type": typ, "fingerprint": contract.Fingerprint}}
 				x.nodes[contract.ID] = n
 				x.contracts = append(x.contracts, contract)
 			}
@@ -452,7 +454,7 @@ func (x *indexer) collect() error {
 				sum := sha1.Sum(source[startOffset:endOffset])
 				fingerprint = hex.EncodeToString(sum[:])
 			}
-			n := Node{ID: id, Kind: kind, Label: label, Service: x.serviceID, Package: pkgID, File: fmt.Sprintf("%s:%d", rel, pos.Line), Meta: map[string]any{"exported": ast.IsExported(fn.Name.Name), "startLine": pos.Line, "endLine": end.Line, "fingerprint": fingerprint}}
+			n := Node{ID: id, Kind: kind, Label: label, Service: x.serviceID, Package: pkgID, File: fmt.Sprintf("%s:%d", rel, pos.Line), Owner: ownerFor(x.owners, rel), Meta: map[string]any{"exported": ast.IsExported(fn.Name.Name), "startLine": pos.Line, "endLine": end.Line, "fingerprint": fingerprint}}
 			x.nodes[id] = n
 			x.byPackage[pkgID][fn.Name.Name] = id
 			x.byPackage[pkgID][label] = id

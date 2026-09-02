@@ -141,3 +141,13 @@ test('saved-view hydration is an undoable navigation event', () => {
   assert.equal(history.back.length, 1);
   assert.equal(goBack(history).current.projectionId, 'dependencies');
 });
+
+test('opens an attention unit as one package-level impact investigation', () => {
+  const initial = createInvestigationState({ contextKey: 'snapshot:old:1' });
+  const next = investigationReducer(initial, { type: 'openAttentionUnit', contextKey: 'snapshot:repo:2', nodeId: 'pkg:billing' });
+  assert.equal(next.contextKey, 'snapshot:repo:2');
+  assert.equal(next.projectionId, 'impact');
+  assert.equal(next.abstraction, 'package');
+  assert.equal(next.focalNodeId, 'pkg:billing');
+  assert.deepEqual(next.selectedEntity, { kind: 'node', id: 'pkg:billing' });
+});

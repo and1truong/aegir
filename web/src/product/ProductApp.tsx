@@ -20,6 +20,7 @@ import { abstractGraph } from '../graph/abstraction';
 import { evidenceForEdge, formatEvidenceLocation } from '../graph/evidence';
 import { projectionDefinitions, questionProjectionIds, signalProjectionIds } from '../graph/projection/definitions';
 import { adaptGraphDelta, deltaStatusMaps, graphForReviewPolicy, type ReviewGraphPolicy } from '../review/delta';
+import { pathQueryDefinitions, runPathQuery, type PathQueryId, type PathQueryResult, type SemanticPath } from '../path/query';
 
 type Screen = 'overview' | 'explorer' | 'pulls' | 'rules' | 'search' | 'settings';
 type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint' | 'what-can-break' | 'hot-path' | 'state-mutation' | 'retry-paths' | 'transaction-boundaries' | 'cross-team-dependencies' | 'what-changed-architecturally';
@@ -126,6 +127,19 @@ function PinnedStrip({ nodeIds, nodes, unpin, clear }: { nodeIds: string[]; node
   return <div className="flex min-h-7 items-center gap-1 border-b border-zinc-800 bg-amber-950/10 px-3"><span className="mr-1 text-[9px] font-semibold uppercase tracking-wider text-amber-500">Pinned {nodeIds.length}/5</span>{nodeIds.map((id) => <button key={id} onClick={() => unpin(id)} title="Unpin" className="rounded border border-amber-900/60 px-1.5 py-0.5 font-mono text-[9px] text-amber-200">{labels.get(id) ?? id} ×</button>)}<button onClick={clear} className="ml-auto text-[9px] text-zinc-500 hover:text-zinc-200">Clear pins</button></div>;
 }
 
+function PathQueryBar({ nodes, sourceId, targetId, queryId, result, selectedPath, setTargetId, setQueryId, run, choosePath }: { nodes: readonly SysNode[]; sourceId?: string; targetId: string; queryId: PathQueryId; result?: PathQueryResult; selectedPath: number; setTargetId: (id: string) => void; setQueryId: (id: PathQueryId) => void; run: () => void; choosePath: (index: number) => void }) {
+  const paths = result?.path ? [result.path, ...result.alternatives] : [];
+  return <div className="flex min-h-8 items-center gap-2 border-b border-zinc-800 bg-violet-950/10 px-3 py-1">
+    <span className="text-[9px] font-semibold uppercase tracking-wider text-violet-400">Why affected?</span>
+    <select aria-label="Path query type" value={queryId} onChange={(event) => setQueryId(event.target.value as PathQueryId)} className="h-6 rounded border border-zinc-800 bg-zinc-950 px-1.5 text-[10px] text-zinc-300">{Object.values(pathQueryDefinitions).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
+    <span className="text-[10px] text-zinc-600">to</span>
+    <select aria-label="Path target" value={targetId} onChange={(event) => setTargetId(event.target.value)} className="h-6 max-w-[220px] rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300"><option value="">Choose target…</option>{nodes.filter((node) => node.id !== sourceId).map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}</select>
+    <button onClick={run} disabled={!sourceId || !targetId} className="h-6 rounded border border-violet-800 px-2 text-[9px] text-violet-200 disabled:opacity-40">Find path</button>
+    {paths.length > 0 && <><span className="ml-auto text-[9.5px] text-zinc-400">{paths[selectedPath]?.semanticHops} semantic hops · {paths.length - 1} alternate{paths.length === 2 ? '' : 's'}</span>{paths.length > 1 && <select aria-label="Path result" value={selectedPath} onChange={(event) => choosePath(Number(event.target.value))} className="h-6 rounded border border-zinc-800 bg-zinc-950 px-1 text-[9.5px] text-zinc-300">{paths.map((path, index) => <option key={path.id} value={index}>{index === 0 ? 'Best path' : `Alternative ${index}`}</option>)}</select>}</>}
+    {result?.noPath && <span className="ml-auto text-[9.5px] text-amber-300">{result.noPath.message}</span>}
+  </div>;
+}
+
 interface GraphViewProps {
   theme: 'light' | 'dark';
   focusMode: boolean;
@@ -144,6 +158,10 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
   );
   const branchExpansions = useMemo(() => legacyBranchExpansions(investigation), [investigation]);
   const [query, setQuery] = useState('');
+  const [pathTargetId, setPathTargetId] = useState('');
+  const [pathQueryId, setPathQueryId] = useState<PathQueryId>('semantic-dependency');
+  const [pathResult, setPathResult] = useState<PathQueryResult>();
+  const [selectedPathIndex, setSelectedPathIndex] = useState(0);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [contractDiff, setContractDiff] = useState<ContractDiff>();
   const nodes = snapshot?.nodes ?? [];
@@ -156,11 +174,16 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const graphIndex = abstractionGraph.index;
   const projectedSelected = selected ? abstractionGraph.canonicalToRepresentative.get(selected) : undefined;
   const projectedPins = useMemo(() => [...new Set(investigation.pinnedNodeIds.flatMap((id) => abstractionGraph.canonicalToRepresentative.get(id) ?? []))], [investigation.pinnedNodeIds, abstractionGraph]);
+  const pathOptions = pathResult?.path ? [pathResult.path, ...pathResult.alternatives] : [];
+  const activePath: SemanticPath | undefined = pathOptions[selectedPathIndex];
 
   useEffect(() => {
     dispatch({ type: 'resetContext', contextKey: `snapshot:${active?.id ?? 'none'}:${snapshot?.id ?? 'none'}`, projectionId: 'dependencies' });
     setContractDiff(undefined);
+    setPathResult(undefined);
+    setPathTargetId('');
   }, [active?.id, snapshot?.id, dispatch]);
+  useEffect(() => { setPathResult(undefined); setSelectedPathIndex(0) }, [projectedSelected, pathQueryId, investigation.evidencePolicy.maximumLevel, investigation.evidencePolicy.includeStale]);
   useEffect(() => {
     if (mode !== 'contracts' || !active) return;
     fetch(`/api/repositories/${active.id}/contracts/diff`).then((response) => response.json()).then(setContractDiff);
@@ -178,8 +201,8 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
     branchExpansions,
     nodeBudget: 30,
     evidencePolicy: investigation.evidencePolicy,
-    pinnedNodeIds: projectedPins,
-  }), [graphIndex, mode, projectedSelected, lintRoots, upstreamDepth, downstreamDepth, enabledRelationships, branchExpansions, investigation.evidencePolicy, projectedPins]);
+    pinnedNodeIds: [...new Set([...projectedPins, ...(activePath?.nodeIds ?? [])])],
+  }), [graphIndex, mode, projectedSelected, lintRoots, upstreamDepth, downstreamDepth, enabledRelationships, branchExpansions, investigation.evidencePolicy, projectedPins, activePath]);
   const selectedEdgeId = investigation.selectedEntity?.kind === 'edge' ? investigation.selectedEntity.id : undefined;
   const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId);
   const selectedVisibleEdge = graph.visibleGraph.edges.find((edge) => edge.kind === 'real' && edge.id === selectedEdgeId);
@@ -249,8 +272,16 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
       }
     }
     for (const id of projectedPins) value.badges![id] = [...(value.badges![id] ?? []), { text: 'PIN', tone: 'amber' }];
+    if (activePath) {
+      value.highlight = new Set(activePath.nodeIds);
+      value.dimmed = new Set(graph.nodes.filter((node) => !activePath.nodeIds.includes(node.id)).map((node) => node.id));
+      value.edgeHighlight = new Set(activePath.edgeIds);
+      value.edgeDimmed = new Set(graph.edges.filter((edge) => !activePath.edgeIds.includes(edge.id)).map((edge) => edge.id));
+      value.edgeTone ??= {};
+      for (const edgeId of activePath.edgeIds) value.edgeTone[edgeId] = 'highlight';
+    }
     return value;
-  }, [graph.nodes, graph.edges, graph.visibleGraph.nodes, mode, coverage, complexity, telemetry, violations, snapshot, contractDiff, projectedPins]);
+  }, [graph.nodes, graph.edges, graph.visibleGraph.nodes, mode, coverage, complexity, telemetry, violations, snapshot, contractDiff, projectedPins, activePath]);
 
   const selectedNode = projectedSelected ? graphIndex.nodeById.get(projectedSelected) : undefined;
   useEffect(() => {
@@ -289,6 +320,7 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
       </div>}
       {!focusMode && projectionDefinitions[mode]?.category === 'question' && <div className="flex items-center gap-3 border-b border-zinc-800 bg-sky-950/10 px-3 py-1.5 text-[10.5px]"><span className="font-semibold text-sky-200">{projectionDefinitions[mode].label}</span><span className="text-zinc-500">{projectionDefinitions[mode].description}</span>{graph.visibleGraph.warnings.map((warning) => <span key={`${warning.code}:${warning.message}`} className="ml-auto text-amber-300">{warning.message}</span>)}</div>}
       {!focusMode && <InvestigationBreadcrumbs nodes={nodes} />}
+      {!focusMode && <PathQueryBar nodes={graphIndex.nodes} sourceId={projectedSelected} targetId={pathTargetId} queryId={pathQueryId} result={pathResult} selectedPath={selectedPathIndex} setTargetId={(id) => { setPathTargetId(id); setPathResult(undefined); setSelectedPathIndex(0) }} setQueryId={setPathQueryId} choosePath={setSelectedPathIndex} run={() => { if (!projectedSelected || !pathTargetId) return; setPathResult(runPathQuery(graphIndex, { definitionId: pathQueryId, sourceNodeId: projectedSelected, targetNodeId: pathTargetId, evidencePolicy: investigation.evidencePolicy, maxAlternatives: 2 })); setSelectedPathIndex(0) }} />}
       {!focusMode && <PinnedStrip nodeIds={investigation.pinnedNodeIds} nodes={nodes} unpin={(nodeId) => dispatch({ type: 'unpinNode', nodeId })} clear={() => dispatch({ type: 'clearPins' })} />}
       {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS[mode]} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} evidenceLevel={investigation.evidencePolicy.maximumLevel} includeStale={investigation.evidencePolicy.includeStale} setEvidenceLevel={(maximumLevel) => dispatch({ type: 'setEvidencePolicy', maximumLevel })} setIncludeStale={(includeStale) => dispatch({ type: 'setEvidencePolicy', includeStale })} abstraction={investigation.abstraction} setAbstraction={(abstraction) => dispatch({ type: 'setAbstraction', abstraction })} expandedBranches={expandedBranchLabels(branchExpansions, nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}
       <div className="flex min-h-0 flex-1">

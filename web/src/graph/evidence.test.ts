@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import type { EvidenceRecord, SysEdge, SysNode } from '../data/types';
+import { createGraphIndex } from './index.ts';
+import { evidenceForEdge, formatEvidenceLocation } from './evidence.ts';
+
+test('returns every observation for a collapsed canonical edge', () => {
+  const nodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A' }, { id: 'b', kind: 'function', label: 'B' }];
+  const edge: SysEdge = { id: 'call', source: 'a', target: 'b', kind: 'calls', evidenceRefs: ['one', 'two'] };
+  const records: EvidenceRecord[] = [
+    { id: 'one', source: 'CODE', strength: 'proven', subject: { kind: 'edge', id: 'call' }, summary: 'first', location: { file: 'a.go', line: 10 } },
+    { id: 'two', source: 'CODE', strength: 'proven', subject: { kind: 'edge', id: 'call' }, summary: 'second', location: { file: 'a.go', line: 20 } },
+  ];
+  const found = evidenceForEdge(createGraphIndex(nodes, [edge], records), edge);
+  assert.deepEqual(found.map((record) => record.id), ['one', 'two']);
+  assert.equal(formatEvidenceLocation(found[0]), 'a.go:10');
+});
+
+test('excludes subject evidence not declared by the current edge body', () => {
+  const nodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A' }, { id: 'b', kind: 'function', label: 'B' }];
+  const edge: SysEdge = { id: 'call', source: 'a', target: 'b', kind: 'calls', evidenceRefs: ['current'] };
+  const records: EvidenceRecord[] = [
+    { id: 'historical', source: 'CODE', strength: 'proven', subject: { kind: 'edge', id: 'call' }, summary: 'removed call site' },
+    { id: 'current', source: 'CODE', strength: 'proven', subject: { kind: 'edge', id: 'call' }, summary: 'current call site' },
+  ];
+  const found = evidenceForEdge(createGraphIndex(nodes, [edge], records), edge);
+  assert.deepEqual(found.map((record) => record.id), ['current']);
+});
+
+test('preserves explicit empty evidence refs while legacy null uses subject fallback', () => {
+  const nodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A' }, { id: 'b', kind: 'function', label: 'B' }];
+  const record: EvidenceRecord = { id: 'historical', source: 'CODE', strength: 'proven', subject: { kind: 'edge', id: 'call' }, summary: 'removed call site' };
+  const current: SysEdge = { id: 'call', source: 'a', target: 'b', kind: 'calls', evidenceRefs: [] };
+  const legacy: SysEdge = { ...current, evidenceRefs: null };
+  assert.deepEqual(evidenceForEdge(createGraphIndex(nodes, [current], [record]), current), []);
+  assert.deepEqual(evidenceForEdge(createGraphIndex(nodes, [legacy], [record]), legacy).map((item) => item.id), ['historical']);
+});
+
+test('provides explicit legacy evidence instead of an empty explanation', () => {
+  const nodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A' }, { id: 'b', kind: 'function', label: 'B' }];
+  const edge: SysEdge = { id: 'call', source: 'a', target: 'b', kind: 'calls' };
+  const found = evidenceForEdge(createGraphIndex(nodes, [edge]), edge);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].strength, 'inferred');
+});

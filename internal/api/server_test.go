@@ -53,6 +53,9 @@ func TestRepositoryIndexAndImpactFlow(t *testing.T) {
 	if snapshot.Repository.Status != "ready" || len(snapshot.Nodes) == 0 || len(snapshot.Edges) == 0 {
 		t.Fatalf("unexpected snapshot: %#v", snapshot.Stats)
 	}
+	if len(snapshot.Evidence) == 0 || len(snapshot.Edges[0].EvidenceRefs) == 0 {
+		t.Fatal("expected persisted edge evidence in indexed snapshot")
+	}
 	measured := false
 	for _, coverage := range snapshot.Analysis.Coverage {
 		measured = measured || coverage.Line == 100

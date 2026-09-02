@@ -14,6 +14,7 @@ func TestRunIndexesFunctionsCallsTestsAndContracts(t *testing.T) {
 		"go.mod":              "module example.com/shop\n\ngo 1.24\n",
 		"order/order.go":      "package order\nimport (\"database/sql\"; \"net/http\")\ntype Publisher interface { Publish(string) }\nfunc Create(db *sql.DB, publisher Publisher) { Validate(); db.Exec(`INSERT INTO orders (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id=excluded.id`); publisher.Publish(\"order.created\"); http.Get(\"https://fraud.example/check\"); headers.Set(\"origin\", \"https://not-a-call.example\") }\nfunc Validate() {}\n",
 		"order/order_test.go": "package order\nimport \"testing\"\nfunc TestCreate(t *testing.T) { Create() }\n",
+		"order/repeat.go":     "package order\nfunc Repeat() {\nValidate()\nValidate()\n}\n",
 		"cmd/main.go":         "package main\nimport \"example.com/shop/order\"\nfunc main() { order.Create() }\n",
 		"cyclea/a.go":         "package cyclea\nimport \"example.com/shop/cycleb\"\nfunc A() { cycleb.B() }\n",
 		"cycleb/b.go":         "package cycleb\nimport \"example.com/shop/cyclea\"\nfunc B() { cyclea.A() }\n",
@@ -100,6 +101,27 @@ func TestRunIndexesFunctionsCallsTestsAndContracts(t *testing.T) {
 	}
 	if hasFalseTable {
 		t.Fatal("SQL UPDATE SET clause must not create a table named SET")
+	}
+	evidenceByID := map[string]EvidenceRecord{}
+	for _, record := range snapshot.Evidence {
+		evidenceByID[record.ID] = record
+	}
+	multipleCallSites := false
+	for _, edge := range snapshot.Edges {
+		if len(edge.EvidenceRefs) == 0 {
+			t.Fatalf("edge %s has no evidence", edge.ID)
+		}
+		for _, evidenceID := range edge.EvidenceRefs {
+			if evidenceByID[evidenceID].Subject.ID != edge.ID {
+				t.Fatalf("edge %s references missing or mismatched evidence %s", edge.ID, evidenceID)
+			}
+		}
+		if edge.Kind == "calls" && len(edge.EvidenceRefs) == 2 {
+			multipleCallSites = true
+		}
+	}
+	if !multipleCallSites {
+		t.Fatal("expected collapsed call relationship to preserve both call-site observations")
 	}
 	hasCycle := false
 	for _, violation := range snapshot.Analysis.Violations {

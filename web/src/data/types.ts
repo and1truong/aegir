@@ -32,6 +32,7 @@ export type EdgeKind =
   | 'retries';
 
 export type PRChange = 'added' | 'removed' | 'modified';
+export type GraphDeltaStatus = 'unchanged' | PRChange;
 
 export type Boundary = 'network' | 'async' | 'persistence' | 'process' | 'transaction';
 
@@ -54,6 +55,8 @@ export interface SysNode {
   op?: string;
   tags?: string[];
   meta?: Record<string, string | number | string[]>;
+  representedNodeIds?: string[];
+  abstractionLevel?: 'service' | 'component' | 'package' | 'symbol';
 }
 
 export interface SysEdge {
@@ -71,6 +74,54 @@ export interface SysEdge {
   tx?: string;
   pr?: PRChange;
   sync?: boolean;
+  evidenceRefs?: string[] | null;
+  canonicalEdgeIds?: string[];
+  underlyingCount?: number;
+}
+
+export type EvidenceSource = 'CODE' | 'STATIC' | 'RUNTIME' | 'SCHEMA' | 'TEST' | 'GIT' | 'INCIDENT' | 'LINT' | 'INFERRED';
+export type EvidenceStrength = 'proven' | 'observed' | 'inferred';
+
+export interface EvidenceRecord {
+  id: string;
+  source: EvidenceSource;
+  strength: EvidenceStrength;
+  subject: { kind: 'node' | 'edge' | 'finding' | 'contract'; id: string };
+  summary: string;
+  location?: { file: string; line?: number; endLine?: number; symbol?: string };
+  snapshotId?: number;
+  commit?: string;
+  reviewId?: string;
+  observedAt?: string;
+  validUntil?: string;
+  metrics?: Record<string, number | string>;
+}
+
+export interface GraphChangeReason {
+  kind: string;
+  detail: string;
+  evidenceRefs?: string[];
+}
+
+export interface GraphNodeDelta {
+  id: string;
+  status: GraphDeltaStatus;
+  before?: SysNode;
+  after?: SysNode;
+  changeReasons: GraphChangeReason[];
+}
+
+export interface GraphEdgeDelta {
+  id: string;
+  status: GraphDeltaStatus;
+  before?: SysEdge;
+  after?: SysEdge;
+  changeReasons: GraphChangeReason[];
+}
+
+export interface GraphDelta {
+  nodes: GraphNodeDelta[];
+  edges: GraphEdgeDelta[];
 }
 
 export interface Team {

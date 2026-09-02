@@ -32,14 +32,34 @@ type Node struct {
 }
 
 type Edge struct {
-	ID          string `json:"id"`
-	Source      string `json:"source"`
-	Target      string `json:"target"`
-	Kind        string `json:"kind"`
-	Label       string `json:"label,omitempty"`
-	Boundary    string `json:"boundary,omitempty"`
-	Synchronous bool   `json:"sync,omitempty"`
-	Change      string `json:"pr,omitempty"`
+	ID           string   `json:"id"`
+	Source       string   `json:"source"`
+	Target       string   `json:"target"`
+	Kind         string   `json:"kind"`
+	Label        string   `json:"label,omitempty"`
+	Boundary     string   `json:"boundary,omitempty"`
+	Synchronous  bool     `json:"sync,omitempty"`
+	Change       string   `json:"pr,omitempty"`
+	EvidenceRefs []string `json:"evidenceRefs"`
+}
+
+type EvidenceSubject struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+type EvidenceLocation struct {
+	File string `json:"file"`
+	Line int    `json:"line,omitempty"`
+}
+
+type EvidenceRecord struct {
+	ID       string            `json:"id"`
+	Source   string            `json:"source"`
+	Strength string            `json:"strength"`
+	Subject  EvidenceSubject   `json:"subject"`
+	Summary  string            `json:"summary"`
+	Location *EvidenceLocation `json:"location,omitempty"`
 }
 
 type Evidence struct {
@@ -133,11 +153,12 @@ type Repository struct {
 }
 
 type Snapshot struct {
-	Repository Repository     `json:"repository"`
-	Nodes      []Node         `json:"nodes"`
-	Edges      []Edge         `json:"edges"`
-	Analysis   Analysis       `json:"analysis"`
-	Stats      map[string]int `json:"stats"`
+	Repository Repository       `json:"repository"`
+	Nodes      []Node           `json:"nodes"`
+	Edges      []Edge           `json:"edges"`
+	Evidence   []EvidenceRecord `json:"evidence"`
+	Analysis   Analysis         `json:"analysis"`
+	Stats      map[string]int   `json:"stats"`
 }
 
 type function struct {
@@ -151,16 +172,18 @@ type function struct {
 }
 
 type indexer struct {
-	root      string
-	module    string
-	serviceID string
-	fset      *token.FileSet
-	nodes     map[string]Node
-	edges     map[string]Edge
-	functions []function
-	byPackage map[string]map[string]string
-	packages  map[string]string
-	contracts []Contract
+	root        string
+	module      string
+	serviceName string
+	serviceID   string
+	fset        *token.FileSet
+	nodes       map[string]Node
+	edges       map[string]Edge
+	evidence    map[string]EvidenceRecord
+	functions   []function
+	byPackage   map[string]map[string]string
+	packages    map[string]string
+	contracts   []Contract
 }
 
 func stableID(kind, value string) string {
@@ -168,21 +191,77 @@ func stableID(kind, value string) string {
 	return kind + ":" + hex.EncodeToString(sum[:8])
 }
 
-func addEdge(edges map[string]Edge, source, kind, target, label string) {
+func (x *indexer) addEdge(source, kind, target, label, location string) {
 	if source == "" || target == "" || source == target {
 		return
 	}
 	id := source + "|" + kind + "|" + target
-	edges[id] = Edge{ID: id, Source: source, Target: target, Kind: kind, Label: label, Synchronous: kind == "calls"}
+	edge := x.edges[id]
+	if edge.ID == "" {
+		edge = Edge{ID: id, Source: source, Target: target, Kind: kind, Label: label, Synchronous: kind == "calls"}
+	}
+	file, line := splitLocation(location)
+	evidenceID := stableID("evidence", id+"\x00"+location+"\x00"+label)
+	if !contains(edge.EvidenceRefs, evidenceID) {
+		edge.EvidenceRefs = append(edge.EvidenceRefs, evidenceID)
+		sort.Strings(edge.EvidenceRefs)
+	}
+	summary := label
+	if summary == "" {
+		summary = kind
+	}
+	record := EvidenceRecord{ID: evidenceID, Source: "STATIC", Strength: "proven", Subject: EvidenceSubject{Kind: "edge", ID: id}, Summary: summary}
+	if file != "" {
+		record.Source = "CODE"
+		record.Location = &EvidenceLocation{File: file, Line: line}
+	}
+	x.evidence[evidenceID] = record
+	x.edges[id] = edge
 }
 
-func addBoundaryEdge(edges map[string]Edge, source, kind, target, label, boundary string) {
-	addEdge(edges, source, kind, target, label)
+func (x *indexer) addBoundaryEdge(source, kind, target, label, boundary, location string) {
+	x.addEdge(source, kind, target, label, location)
 	id := source + "|" + kind + "|" + target
-	edge := edges[id]
+	edge := x.edges[id]
 	edge.Boundary = boundary
 	edge.Synchronous = boundary != "async"
-	edges[id] = edge
+	x.edges[id] = edge
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func splitLocation(value string) (string, int) {
+	if value == "" {
+		return "", 0
+	}
+	index := strings.LastIndex(value, ":")
+	if index < 0 {
+		return value, 0
+	}
+	line, err := strconv.Atoi(value[index+1:])
+	if err != nil {
+		return value, 0
+	}
+	return value[:index], line
+}
+
+func (x *indexer) sourceLocation(pos token.Pos) string {
+	position := x.fset.Position(pos)
+	if !position.IsValid() {
+		return ""
+	}
+	rel, err := filepath.Rel(x.root, position.Filename)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", filepath.ToSlash(rel), position.Line)
 }
 
 func readModule(root string) string {
@@ -233,8 +312,8 @@ func newIndexer(root, repositoryName string) *indexer {
 		name = filepath.Base(root)
 	}
 	return &indexer{
-		root: root, module: readModule(root), serviceID: stableID("service", name), fset: token.NewFileSet(),
-		nodes: map[string]Node{}, edges: map[string]Edge{}, byPackage: map[string]map[string]string{}, packages: map[string]string{}, contracts: []Contract{},
+		root: root, module: readModule(root), serviceName: name, serviceID: stableID("service", name), fset: token.NewFileSet(),
+		nodes: map[string]Node{}, edges: map[string]Edge{}, evidence: map[string]EvidenceRecord{}, byPackage: map[string]map[string]string{}, packages: map[string]string{}, contracts: []Contract{},
 	}
 }
 
@@ -250,7 +329,7 @@ func (x *indexer) packageFor(dir, packageName string) string {
 	id = stableID("package", filepath.ToSlash(rel))
 	x.packages[dir] = id
 	x.nodes[id] = Node{ID: id, Kind: "package", Label: filepath.ToSlash(rel), Service: x.serviceID, File: filepath.ToSlash(rel)}
-	addEdge(x.edges, x.serviceID, "owns", id, "contains")
+	x.addEdge(x.serviceID, "owns", id, "contains", filepath.ToSlash(rel))
 	return id
 }
 
@@ -281,7 +360,7 @@ func ignoredDir(name string) bool {
 }
 
 func (x *indexer) collect() error {
-	service := Node{ID: x.serviceID, Kind: "service", Label: filepath.Base(x.root), File: ".", Description: "Repository root", Meta: map[string]any{"module": x.module}}
+	service := Node{ID: x.serviceID, Kind: "service", Label: x.serviceName, File: ".", Description: "Repository root", Meta: map[string]any{"module": x.module}}
 	x.nodes[service.ID] = service
 	return filepath.WalkDir(x.root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -337,13 +416,13 @@ func (x *indexer) collect() error {
 			}
 			imports[alias] = importPath
 			if localID, local := x.localPackageID(importPath); local {
-				addEdge(x.edges, pkgID, "depends_on", localID, "imports")
+				x.addEdge(pkgID, "depends_on", localID, "imports", x.sourceLocation(spec.Pos()))
 			} else {
 				extID := stableID("package", importPath)
 				if _, exists := x.nodes[extID]; !exists {
 					x.nodes[extID] = Node{ID: extID, Kind: "package", Label: importPath, Tags: []string{"external"}}
 				}
-				addEdge(x.edges, pkgID, "depends_on", extID, "imports")
+				x.addEdge(pkgID, "depends_on", extID, "imports", x.sourceLocation(spec.Pos()))
 			}
 		}
 		if x.byPackage[pkgID] == nil {
@@ -378,7 +457,7 @@ func (x *indexer) collect() error {
 			x.byPackage[pkgID][fn.Name.Name] = id
 			x.byPackage[pkgID][label] = id
 			x.functions = append(x.functions, function{node: n, pkgDir: filepath.Dir(path), packageID: pkgID, decl: fn, file: parsed, imports: imports, isTest: isTest})
-			addEdge(x.edges, pkgID, "owns", id, "declares")
+			x.addEdge(pkgID, "owns", id, "declares", x.sourceLocation(fn.Pos()))
 		}
 		return nil
 	})
@@ -448,7 +527,7 @@ func (x *indexer) connect() {
 				if fn.isTest && x.nodes[targetID].Kind != "package" {
 					kind = "tests"
 				}
-				addEdge(x.edges, fn.node.ID, kind, targetID, callName)
+				x.addEdge(fn.node.ID, kind, targetID, callName, x.sourceLocation(call.Pos()))
 			}
 			x.connectDataflow(fn, call)
 			name := strings.ToUpper(callName)
@@ -470,7 +549,7 @@ func (x *indexer) connect() {
 					}
 					id := stableID("endpoint", method+" "+path)
 					x.nodes[id] = Node{ID: id, Kind: "endpoint", Label: method + " " + path, Service: x.serviceID, File: fn.node.File}
-					addEdge(x.edges, id, "calls", fn.node.ID, "handler")
+					x.addEdge(id, "calls", fn.node.ID, "handler", x.sourceLocation(call.Pos()))
 				}
 			}
 			return true
@@ -540,7 +619,7 @@ func (x *indexer) connectDataflow(fn function, call *ast.CallExpr) {
 					continue
 				}
 				target := x.resourceNode("table", table, "SQL table discovered from a literal query")
-				addBoundaryEdge(x.edges, fn.node.ID, kind, target, operation, "persistence")
+				x.addBoundaryEdge(fn.node.ID, kind, target, operation, "persistence", x.sourceLocation(call.Pos()))
 			}
 			return
 		}
@@ -560,7 +639,7 @@ func (x *indexer) connectDataflow(fn function, call *ast.CallExpr) {
 				continue
 			}
 			target := x.resourceNode("topic", value, "Message topic discovered from a literal call argument")
-			addBoundaryEdge(x.edges, fn.node.ID, messageKind, target, selector.Sel.Name, "async")
+			x.addBoundaryEdge(fn.node.ID, messageKind, target, selector.Sel.Name, "async", x.sourceLocation(call.Pos()))
 			return
 		}
 	}
@@ -576,7 +655,7 @@ func (x *indexer) connectDataflow(fn function, call *ast.CallExpr) {
 				kind = "writes"
 			}
 			target := x.resourceNode("cache", value, "Cache key discovered from a literal call argument")
-			addBoundaryEdge(x.edges, fn.node.ID, kind, target, selector.Sel.Name, "persistence")
+			x.addBoundaryEdge(fn.node.ID, kind, target, selector.Sel.Name, "persistence", x.sourceLocation(call.Pos()))
 			return
 		}
 	}
@@ -592,7 +671,7 @@ func (x *indexer) connectDataflow(fn function, call *ast.CallExpr) {
 			continue
 		}
 		target := x.resourceNode("external", parsed.Host, "External HTTP destination discovered from a literal URL")
-		addBoundaryEdge(x.edges, fn.node.ID, "calls", target, strings.ToUpper(method), "network")
+		x.addBoundaryEdge(fn.node.ID, "calls", target, strings.ToUpper(method), "network", x.sourceLocation(call.Pos()))
 		return
 	}
 }
@@ -859,6 +938,11 @@ func RunWithOptions(root string, options Options) (Snapshot, error) {
 		edges = append(edges, e)
 	}
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	evidence := make([]EvidenceRecord, 0, len(x.evidence))
+	for _, record := range x.evidence {
+		evidence = append(evidence, record)
+	}
+	sort.Slice(evidence, func(i, j int) bool { return evidence[i].ID < evidence[j].ID })
 	stats := map[string]int{"nodes": len(nodes), "edges": len(edges), "violations": len(analysis.Violations), "contracts": len(analysis.Contracts)}
-	return Snapshot{Repository: Repository{Name: filepath.Base(abs), Path: abs, Module: x.module, Head: gitHead(abs)}, Nodes: nodes, Edges: edges, Analysis: analysis, Stats: stats}, nil
+	return Snapshot{Repository: Repository{Name: filepath.Base(abs), Path: abs, Module: x.module, Head: gitHead(abs)}, Nodes: nodes, Edges: edges, Evidence: evidence, Analysis: analysis, Stats: stats}, nil
 }

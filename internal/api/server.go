@@ -37,6 +37,8 @@ func New(database *store.Store, webDir string) http.Handler {
 	mux.HandleFunc("POST /api/repositories", s.registerRepository)
 	mux.HandleFunc("POST /api/repositories/{id}/index", s.indexRepository)
 	mux.HandleFunc("GET /api/repositories/{id}/graph", s.snapshot)
+	mux.HandleFunc("GET /api/repositories/{id}/timeline", s.timeline)
+	mux.HandleFunc("POST /api/repositories/{id}/timeline/compact", s.compactTimeline)
 	mux.HandleFunc("GET /api/repositories/{id}/impact", s.impact)
 	mux.HandleFunc("GET /api/repositories/{id}/contracts/diff", s.contractDiff)
 	mux.HandleFunc("POST /api/repositories/{id}/reviews", s.createReview)
@@ -217,7 +219,7 @@ func (s *Server) contractDiff(w http.ResponseWriter, r *http.Request) {
 		}
 		base, err = s.store.SnapshotByID(r.Context(), repositoryID, id)
 	} else {
-		base, err = s.store.PreviousSnapshot(r.Context(), repositoryID, head.ID)
+		base, err = s.store.PreviousComparableSnapshot(r.Context(), repositoryID, head)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, 200, contractdiff.Diff{BaseSnapshotID: 0, HeadSnapshotID: head.ID, Changes: []contractdiff.Change{}})
@@ -261,18 +263,8 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 422, err)
 		return
 	}
-	base, err := s.store.SaveHistoricalSnapshot(r.Context(), repository.ID, baseIndexed)
+	value, err := s.store.SaveReviewSnapshots(r.Context(), repository.ID, body.BaseRef, body.HeadRef, baseIndexed, headIndexed)
 	if err != nil {
-		writeError(w, 500, err)
-		return
-	}
-	head, err := s.store.SaveHistoricalSnapshot(r.Context(), repository.ID, headIndexed)
-	if err != nil {
-		writeError(w, 500, err)
-		return
-	}
-	value := review.Compare(repository.ID, body.BaseRef, body.HeadRef, base.ID, head.ID, baseIndexed, headIndexed)
-	if err := s.store.SaveReview(r.Context(), value); err != nil {
 		writeError(w, 500, err)
 		return
 	}
@@ -305,7 +297,16 @@ func (s *Server) getReview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, value)
 }
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := s.store.Snapshot(r.Context(), r.PathValue("id"))
+	repositoryID := r.PathValue("id")
+	snapshot, err := s.store.Snapshot(r.Context(), repositoryID)
+	if raw := r.URL.Query().Get("snapshot"); raw != "" {
+		id, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil {
+			writeError(w, 400, errors.New("invalid snapshot"))
+			return
+		}
+		snapshot, err = s.store.SnapshotByID(r.Context(), repositoryID, id)
+	}
 	if err != nil {
 		status := 500
 		if errors.Is(err, sql.ErrNoRows) {
@@ -315,6 +316,31 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, snapshot)
+}
+
+func (s *Server) timeline(w http.ResponseWriter, r *http.Request) {
+	timeline, err := s.store.Timeline(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, timeline)
+}
+
+func (s *Server) compactTimeline(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		KeepReviews int `json:"keepReviews"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, errors.New("invalid JSON body"))
+		return
+	}
+	result, err := s.store.CompactTimeline(r.Context(), r.PathValue("id"), body.KeepReviews)
+	if err != nil {
+		writeError(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, result)
 }
 func (s *Server) impact(w http.ResponseWriter, r *http.Request) {
 	nodeID := r.URL.Query().Get("nodeId")

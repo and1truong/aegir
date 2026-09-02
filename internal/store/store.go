@@ -343,9 +343,26 @@ func (s *Store) SaveReview(ctx context.Context, value review.Review) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO reviews(id,repository_id,created_at,base_snapshot_id,head_snapshot_id,body_json) VALUES(?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,base_snapshot_id=excluded.base_snapshot_id,head_snapshot_id=excluded.head_snapshot_id,body_json=excluded.body_json`, value.ID, value.RepositoryID, value.CreatedAt, value.BaseSnapshotID, value.HeadSnapshotID, string(body))
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var previousBaseID, previousHeadID int64
+	err = tx.QueryRowContext(ctx, `SELECT base_snapshot_id,head_snapshot_id FROM reviews WHERE repository_id=? AND id=?`, value.RepositoryID, value.ID).Scan(&previousBaseID, &previousHeadID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO reviews(id,repository_id,created_at,base_snapshot_id,head_snapshot_id,body_json) VALUES(?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,base_snapshot_id=excluded.base_snapshot_id,head_snapshot_id=excluded.head_snapshot_id,body_json=excluded.body_json`, value.ID, value.RepositoryID, value.CreatedAt, value.BaseSnapshotID, value.HeadSnapshotID, string(body)); err != nil {
+		return err
+	}
+	if previousBaseID != 0 || previousHeadID != 0 {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM snapshots WHERE repository_id=? AND is_current=0 AND id IN (?,?) AND id NOT IN (SELECT base_snapshot_id FROM reviews WHERE repository_id=? UNION SELECT head_snapshot_id FROM reviews WHERE repository_id=?)`, value.RepositoryID, previousBaseID, previousHeadID, value.RepositoryID, value.RepositoryID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Review(ctx context.Context, repositoryID, id string) (review.Review, error) {

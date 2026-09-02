@@ -101,6 +101,50 @@ func TestPreviousComparableSnapshotStaysInTheMatchingStream(t *testing.T) {
 	}
 }
 
+func TestSaveReviewRemovesUnreferencedSupersededSnapshotPair(t *testing.T) {
+	value, repository := openTemporalStore(t)
+	ctx := context.Background()
+	firstBase, err := value.SaveHistoricalSnapshot(ctx, repository.ID, temporalSnapshot("base"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstHead, err := value.SaveHistoricalSnapshot(ctx, repository.ID, temporalSnapshot("head"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := review.Compare(repository.ID, "base", "head", firstBase.ID, firstHead.ID, temporalSnapshot("base"), temporalSnapshot("head"))
+	if err := value.SaveReview(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	secondBase, err := value.SaveHistoricalSnapshot(ctx, repository.ID, temporalSnapshot("base"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHead, err := value.SaveHistoricalSnapshot(ctx, repository.ID, temporalSnapshot("head"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := review.Compare(repository.ID, "base", "head", secondBase.ID, secondHead.ID, temporalSnapshot("base"), temporalSnapshot("head"))
+	if first.ID != second.ID {
+		t.Fatalf("review IDs differ: %q != %q", first.ID, second.ID)
+	}
+	if err := value.SaveReview(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	for _, snapshotID := range []int64{firstBase.ID, firstHead.ID} {
+		if _, err := value.SnapshotByID(ctx, repository.ID, snapshotID); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("expected superseded snapshot %d to be removed, got %v", snapshotID, err)
+		}
+	}
+	base, err := value.PreviousComparableSnapshot(ctx, repository.ID, secondHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.ID != secondBase.ID {
+		t.Fatalf("review baseline=%d want %d", base.ID, secondBase.ID)
+	}
+}
+
 func TestMigrationClassifiesLegacyReviewSnapshotsBeforeRecoveringCurrent(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "legacy.db")
 	db, err := sql.Open("sqlite", databasePath)

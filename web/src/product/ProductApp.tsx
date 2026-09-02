@@ -557,13 +557,16 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const timelineSyncRequest = useRef(0);
   const syncTimeline = async (shouldApply = () => true) => {
+    const request = ++timelineSyncRequest.current;
     if (shouldApply()) setTimelineError(undefined);
     try { await refreshTimeline() }
-    catch (cause) { if (shouldApply()) setTimelineError(cause instanceof Error ? cause.message : String(cause)) }
+    catch (cause) { if (request === timelineSyncRequest.current && shouldApply()) setTimelineError(cause instanceof Error ? cause.message : String(cause)) }
   };
   useEffect(() => {
     const request = ++reviewRequest.current;
+    timelineSyncRequest.current += 1;
     setReview(undefined);
     setLoading(false); setError(undefined); setTimelineError(undefined);
     if (!active) return;
@@ -579,6 +582,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
     if (!active) return;
     const repositoryID = active.id;
     const request = ++reviewRequest.current;
+    timelineSyncRequest.current += 1;
     setLoading(true); setError(undefined);
     try {
       const response = await fetch(`/api/repositories/${repositoryID}/reviews`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseRef, headRef }) });

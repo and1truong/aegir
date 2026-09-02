@@ -79,10 +79,9 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
   const refreshRepositories = useCallback(async () => {
     const result = await api<{ repositories: Repository[] }>('/api/repositories');
     setRepositories(result.repositories);
-    setError(undefined);
     setRepositorySyncError(undefined);
-    if (!activeID && result.repositories[0]) setActiveID(result.repositories[0].id);
-  }, [activeID]);
+    setActiveID((current) => current || result.repositories[0]?.id || current);
+  }, []);
 
   useEffect(() => {
     refreshRepositories().catch((cause) => setError(cause.message)).finally(() => setLoading(false));

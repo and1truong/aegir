@@ -55,6 +55,8 @@ export interface SysNode {
   op?: string;
   tags?: string[];
   meta?: Record<string, string | number | string[]>;
+  representedNodeIds?: string[];
+  abstractionLevel?: 'service' | 'component' | 'package' | 'symbol';
 }
 
 export interface SysEdge {
@@ -73,6 +75,8 @@ export interface SysEdge {
   pr?: PRChange;
   sync?: boolean;
   evidenceRefs?: string[];
+  canonicalEdgeIds?: string[];
+  underlyingCount?: number;
 }
 
 export type EvidenceSource = 'CODE' | 'STATIC' | 'RUNTIME' | 'SCHEMA' | 'TEST' | 'GIT' | 'INCIDENT' | 'LINT' | 'INFERRED';

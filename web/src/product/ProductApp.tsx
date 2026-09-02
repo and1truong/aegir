@@ -104,6 +104,10 @@ const MODE_RELATIONSHIPS: Record<ExplorerMode, EdgeKind[]> = {
 function expandedBranchLabels(expansions: BranchExpansions, nodes: SysNode[]): ExpandedBranch[] {
   const labels = new Map(nodes.map((node) => [node.id, node.label]));
   return Object.entries(expansions).filter(([, pages]) => pages > 0).map(([key]) => {
+    if (key.startsWith('frontier:')) {
+      const parts = key.split(':');
+      return { key, direction: parts[1] as ExpandedBranch['direction'], label: decodeURIComponent(parts.at(-1) ?? 'group') };
+    }
     const [direction, encodedParentId] = key.split(':');
     const parentId = decodeURIComponent(encodedParentId);
     return { key, direction: direction as ExpandedBranch['direction'], label: labels.get(parentId) ?? 'branch' };
@@ -166,6 +170,8 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
   const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId);
   const selectedVisibleEdge = graph.visibleGraph.edges.find((edge) => edge.kind === 'real' && edge.id === selectedEdgeId);
   const selectedVisibleNode = graph.visibleGraph.nodes.find((item) => item.kind === 'real' && item.id === selected);
+  const selectedFrontierId = investigation.selectedEntity?.kind === 'frontier' ? investigation.selectedEntity.id : undefined;
+  const selectedFrontier = graph.visibleGraph.nodes.find((item) => item.kind === 'frontier' && item.frontier.id === selectedFrontierId);
   useEffect(() => {
     if (selectedEdgeId && !selectedEdge) dispatch({ type: 'selectEntity', entity: selected ? { kind: 'node', id: selected } : null });
   }, [selectedEdgeId, selectedEdge, selected, dispatch]);
@@ -237,10 +243,15 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
   const selectGraphNode = (id: string) => {
     const aggregate = graph.aggregates.find((item) => item.nodeId === id);
     if (aggregate) {
-      dispatch({ type: 'expandFrontier', frontierId: aggregate.branchKey });
+      dispatch({ type: 'selectEntity', entity: { kind: 'frontier', id: aggregate.branchKey } });
       return;
     }
     dispatch({ type: 'setFocalNode', nodeId: id });
+  };
+  const expandGraphNode = (id: string) => {
+    const aggregate = graph.aggregates.find((item) => item.nodeId === id);
+    if (aggregate) dispatch({ type: 'expandFrontier', frontierId: aggregate.branchKey, beyondDepth: !aggregate.withinDepth });
+    else dispatch({ type: 'setFocalNode', nodeId: id });
   };
   const toggleRelationship = (kind: EdgeKind) => dispatch({
     type: 'setRelationshipOverride',
@@ -264,9 +275,9 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
           <div className="border-b border-zinc-800 p-2"><div className="flex h-7 items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950 px-2"><Search className="h-3.5 w-3.5 text-zinc-600" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter symbols…" className="w-full bg-transparent font-mono text-[11px] outline-none" /></div></div>
           <div className="min-h-0 flex-1 overflow-y-auto py-1">{filtered.map((node) => <button key={node.id} onClick={() => dispatch({ type: 'setFocalNode', nodeId: node.id })} className={cn('flex w-full items-center gap-2 px-2 py-1 text-left', selected === node.id ? 'bg-sky-500/10 text-sky-100' : 'text-zinc-300 hover:bg-zinc-900')}><KindIcon kind={node.kind} /><span className="min-w-0 flex-1 truncate font-mono text-[10.5px]">{node.label}</span></button>)}</div>
         </aside>}
-        <main className="relative min-w-0 flex-1"><SystemGraph nodes={graph.nodes} edges={graph.edges} frontiers={graph.aggregates} decor={decor} selected={selected} selectedEdge={selectedEdgeId} onSelect={selectGraphNode} onEdgeSelect={(id) => dispatch({ type: 'selectEntity', entity: { kind: 'edge', id } })} onDoubleClick={selectGraphNode} fitKey={`${mode}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</main>
+        <main className="relative min-w-0 flex-1"><SystemGraph nodes={graph.nodes} edges={graph.edges} frontiers={graph.aggregates} decor={decor} selected={selected} selectedEdge={selectedEdgeId} onSelect={selectGraphNode} onEdgeSelect={(id) => dispatch({ type: 'selectEntity', entity: { kind: 'edge', id } })} onDoubleClick={expandGraphNode} fitKey={`${mode}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</main>
         {!focusMode && inspectorOpen && <aside className="w-[310px] shrink-0 overflow-y-auto border-l border-zinc-800 p-3">
-          {selectedEdge ? <EdgeInspector edge={selectedEdge} nodes={nodes} evidence={evidenceForEdge(graphIndex, selectedEdge)} reason={selectedVisibleEdge?.reason.detail} onSelectNode={(id) => dispatch({ type: 'setFocalNode', nodeId: id })} /> : selectedNode ? <><div className="flex items-center gap-2"><KindIcon kind={selectedNode.kind} /><Badge>{selectedNode.kind}</Badge></div><h2 className="mt-2 break-words font-mono text-[13px] text-zinc-50">{selectedNode.label}</h2><div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{selectedNode.file}</div>{selectedVisibleNode?.kind === 'real' && <RankInspector score={selectedVisibleNode.score} />}{mode === 'coverage' && coverage.get(selectedNode.id) && <div className="mt-4 rounded-md border border-zinc-800 p-2"><div className="font-mono text-[18px] text-zinc-100">{coverage.get(selectedNode.id)?.line ?? '—'}%</div><div className="mt-1 text-[10px] text-zinc-500">{coverage.get(selectedNode.id)?.note}</div></div>}{mode === 'complexity' && complexity.get(selectedNode.id) && <ComplexityInspector item={complexity.get(selectedNode.id)!} />}{mode === 'runtime' && telemetry.get(selectedNode.id) && <RuntimeInspector item={telemetry.get(selectedNode.id)!} />}{mode === 'contracts' ? <ContractInspector diff={contractDiff} contractID={selectedNode.id} /> : <div className="mt-4 border-t border-zinc-800 pt-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationships in scope</div>{graph.edges.filter((edge) => edge.source === selected || edge.target === selected).slice(0, 30).map((edge) => { const other = nodes.find((node) => node.id === (edge.source === selected ? edge.target : edge.source)); return <button key={edge.id} onClick={() => other && dispatch({ type: 'setFocalNode', nodeId: other.id })} className="mt-1 flex w-full items-center gap-2 text-left text-[10.5px] text-zinc-300 hover:text-sky-200"><Badge>{edge.kind}</Badge><span className="truncate font-mono">{other?.label}</span></button> })}</div>}</> : <div className="text-zinc-500">Select a node or edge.</div>}
+          {selectedFrontier?.kind === 'frontier' ? <FrontierInspector frontier={selectedFrontier.frontier} expand={() => dispatch({ type: 'expandFrontier', frontierId: selectedFrontier.frontier.id, beyondDepth: !selectedFrontier.frontier.withinDepth })} /> : selectedEdge ? <EdgeInspector edge={selectedEdge} nodes={nodes} evidence={evidenceForEdge(graphIndex, selectedEdge)} reason={selectedVisibleEdge?.reason.detail} onSelectNode={(id) => dispatch({ type: 'setFocalNode', nodeId: id })} /> : selectedNode ? <><div className="flex items-center gap-2"><KindIcon kind={selectedNode.kind} /><Badge>{selectedNode.kind}</Badge></div><h2 className="mt-2 break-words font-mono text-[13px] text-zinc-50">{selectedNode.label}</h2><div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{selectedNode.file}</div>{selectedVisibleNode?.kind === 'real' && <RankInspector score={selectedVisibleNode.score} />}{mode === 'coverage' && coverage.get(selectedNode.id) && <div className="mt-4 rounded-md border border-zinc-800 p-2"><div className="font-mono text-[18px] text-zinc-100">{coverage.get(selectedNode.id)?.line ?? '—'}%</div><div className="mt-1 text-[10px] text-zinc-500">{coverage.get(selectedNode.id)?.note}</div></div>}{mode === 'complexity' && complexity.get(selectedNode.id) && <ComplexityInspector item={complexity.get(selectedNode.id)!} />}{mode === 'runtime' && telemetry.get(selectedNode.id) && <RuntimeInspector item={telemetry.get(selectedNode.id)!} />}{mode === 'contracts' ? <ContractInspector diff={contractDiff} contractID={selectedNode.id} /> : <div className="mt-4 border-t border-zinc-800 pt-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationships in scope</div>{graph.edges.filter((edge) => edge.source === selected || edge.target === selected).slice(0, 30).map((edge) => { const other = nodes.find((node) => node.id === (edge.source === selected ? edge.target : edge.source)); return <button key={edge.id} onClick={() => other && dispatch({ type: 'setFocalNode', nodeId: other.id })} className="mt-1 flex w-full items-center gap-2 text-left text-[10.5px] text-zinc-300 hover:text-sky-200"><Badge>{edge.kind}</Badge><span className="truncate font-mono">{other?.label}</span></button> })}</div>}</> : <div className="text-zinc-500">Select a node, edge, or frontier.</div>}
         </aside>}
       </div>
     </div>
@@ -277,6 +288,10 @@ function EdgeInspector({ edge, nodes, evidence, reason, onSelectNode }: { edge: 
   const source = nodes.find((node) => node.id === edge.source);
   const target = nodes.find((node) => node.id === edge.target);
   return <div><div className="flex items-center gap-2"><Badge tone="blue">{edge.kind}</Badge>{edge.boundary && <Badge>{edge.boundary}</Badge>}{edge.sync !== undefined && <Badge>{edge.sync ? 'sync' : 'async'}</Badge>}</div><h2 className="mt-3 font-mono text-[12px] text-zinc-100">{source?.label ?? edge.source} <span className="text-zinc-600">→</span> {target?.label ?? edge.target}</h2><div className="mt-3 grid grid-cols-2 gap-2"><button onClick={() => onSelectNode(edge.source)} className="rounded-md border border-zinc-800 p-2 text-left text-[10px] text-zinc-400 hover:border-sky-700">Source<div className="mt-1 truncate font-mono text-zinc-200">{source?.label}</div></button><button onClick={() => onSelectNode(edge.target)} className="rounded-md border border-zinc-800 p-2 text-left text-[10px] text-zinc-400 hover:border-sky-700">Target<div className="mt-1 truncate font-mono text-zinc-200">{target?.label}</div></button></div><div className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Why visible</div><p className="mt-1 text-[10.5px] leading-relaxed text-zinc-300">{reason ?? 'Connects visible entities in this projection.'}</p><div className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Evidence</div><div className="mt-1 space-y-2">{evidence.map((record) => <div key={record.id} className="rounded-md border border-zinc-800 p-2"><div className="flex items-center gap-2"><Badge tone={record.strength === 'proven' ? 'green' : record.strength === 'observed' ? 'blue' : 'amber'}>{record.source}</Badge><span className="text-[9px] uppercase tracking-wider text-zinc-500">{record.strength}</span></div><div className="mt-1 text-[10.5px] text-zinc-300">{record.summary}</div>{formatEvidenceLocation(record) && <div className="mt-1 break-all font-mono text-[9.5px] text-sky-300">{formatEvidenceLocation(record)}</div>}</div>)}</div></div>;
+}
+
+function FrontierInspector({ frontier, expand }: { frontier: import('../graph/types').FrontierGroup; expand: () => void }) {
+  return <div><div className="flex items-center gap-2"><Badge tone="blue">{frontier.dimension}</Badge>{!frontier.withinDepth && <Badge tone="amber">beyond depth</Badge>}</div><h2 className="mt-2 font-mono text-[13px] text-zinc-100">{frontier.label}</h2><p className="mt-1 text-[10.5px] text-zinc-500">{frontier.hiddenCount} hidden nodes · aggregate score {frontier.aggregateScore.toFixed(2)}</p><div className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationship mix</div><div className="mt-2 flex flex-wrap gap-1">{Object.entries(frontier.relationMix).map(([kind, count]) => <Badge key={kind}>{kind} · {count}</Badge>)}</div><div className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Evidence summary</div><p className="mt-1 text-[10.5px] text-zinc-400">{frontier.evidenceIds.length} evidence records across this group.</p><Btn variant="solid" className="mt-4" onClick={expand}>Expand {frontier.dimension}</Btn></div>;
 }
 
 function RankInspector({ score }: { score: import('../graph/types').CandidateExplanation }) {
@@ -389,7 +404,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode, railOpen }: GraphViewPro
   const selectGraphNode = (id: string) => {
     const aggregate = graph.aggregates.find((item) => item.nodeId === id);
     if (aggregate) {
-      dispatch({ type: 'expandFrontier', frontierId: aggregate.branchKey });
+      dispatch({ type: 'expandFrontier', frontierId: aggregate.branchKey, beyondDepth: !aggregate.withinDepth });
       return;
     }
     dispatch({ type: 'setFocalNode', nodeId: id });

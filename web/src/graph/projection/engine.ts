@@ -1,6 +1,7 @@
 import type { EdgeKind, NodeKind, SysEdge } from '../../data/types';
 import type { CandidateExplanation, FrontierGroup, GraphIndex, InclusionReason, ProjectionDefinition, ProjectionDepth, ProjectionDirection, VisibleEdge, VisibleGraph, VisibleNode } from '../types';
 import { compareCandidates, scoreCandidate, type RelevanceCandidate } from './relevance.ts';
+import { groupFrontierCandidates } from './grouping.ts';
 
 export type FrontierExpansions = Record<string, number>;
 
@@ -155,7 +156,34 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
         const eligible = [...withinDepth, ...(pages > 0 ? beyondDepth : [])];
         const groupLimit = branchLimit + pages * branchPageSize;
         const remaining = Math.max(0, Math.min(directionLimit, nodeBudget) - visible.size);
-        const selected = eligible.slice(0, Math.min(groupLimit, remaining));
+        let selected = eligible.slice(0, Math.min(groupLimit, remaining));
+        const hasMembership = ordered.some((candidate) => {
+          const membership = index.membership.get(candidate.node.id);
+          return membership?.service || membership?.pkg || membership?.owner;
+        });
+        if (ordered.length > branchLimit && hasMembership) {
+          selected = [];
+          const groupCandidates = ordered.map((candidate) => ({ nodeId: candidate.node.id, relation: candidate.edge.kind, score: candidate.score.total, evidenceIds: [...(index.evidenceBySubject.get(`edge:${candidate.edge.id}`) ?? [])], withinDepth: candidate.nextDepth <= limit }));
+          const groups = groupFrontierCandidates(index, groupCandidates, { parentId: current.id, direction, category: groupCategory });
+          for (const group of groups) {
+            const members = ordered.filter((candidate) => group.memberNodeIds.includes(candidate.node.id));
+            if (!expansions[group.id]) {
+              frontiers.set(group.id, group);
+              continue;
+            }
+            if (group.dimension === 'service' && members.length > branchLimit) {
+              const children = groupFrontierCandidates(index, members.map((candidate) => ({ nodeId: candidate.node.id, relation: candidate.edge.kind, score: candidate.score.total, evidenceIds: [...(index.evidenceBySubject.get(`edge:${candidate.edge.id}`) ?? [])], withinDepth: candidate.nextDepth <= limit })), { parentId: current.id, parentFrontierId: group.id, direction, category: groupCategory, dimensions: ['package', 'relation'] });
+              for (const child of children) {
+                const childMembers = members.filter((candidate) => child.memberNodeIds.includes(candidate.node.id));
+                if (expansions[child.id]) selected.push(...childMembers);
+                else frontiers.set(child.id, child);
+              }
+            } else {
+              selected.push(...members);
+            }
+          }
+          selected = selected.filter((candidate) => candidate.nextDepth <= limit || Object.values(expansions).some((value) => value > 0)).sort(compareCandidates).slice(0, remaining);
+        }
         for (const candidate of selected) {
           visible.add(candidate.node.id);
           traversalEdgeIds.add(candidate.edge.id);
@@ -168,9 +196,12 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
             queue.push({ id: candidate.node.id, depth: candidate.nextDepth });
           }
         }
-        const hidden = ordered.slice(selected.length);
+        const hierarchical = ordered.length > branchLimit && hasMembership;
+        const hidden = hierarchical ? [] : ordered.slice(selected.length);
         if (hidden.length > 0) {
-          frontiers.set(id, { id, parentId: current.id, direction, category: groupCategory, hiddenCount: hidden.length, memberNodeIds: hidden.map((candidate) => candidate.node.id), label: `+${hidden.length} ${groupCategory}`, withinDepth: hidden.every((candidate) => candidate.nextDepth <= limit) });
+          const relationMix: Partial<Record<EdgeKind, number>> = {};
+          hidden.forEach((candidate) => { relationMix[candidate.edge.kind] = (relationMix[candidate.edge.kind] ?? 0) + 1 });
+          frontiers.set(id, { id, parentId: current.id, direction, category: groupCategory, dimension: 'relation', value: groupCategory, visibleCount: selected.length, hiddenCount: hidden.length, memberNodeIds: hidden.map((candidate) => candidate.node.id), label: `+${hidden.length} ${groupCategory}`, withinDepth: hidden.every((candidate) => candidate.nextDepth <= limit), aggregateScore: Math.max(...hidden.map((candidate) => candidate.score.total), 0), relationMix, evidenceIds: [...new Set(hidden.flatMap((candidate) => index.evidenceBySubject.get(`edge:${candidate.edge.id}`) ?? []))].sort(), hasChildren: hidden.length > 1 });
         }
       }
     }
@@ -185,7 +216,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
     const score = scores.get(node.id) ?? explanation(reason as Extract<InclusionReason, { kind: 'root' | 'overview' }>);
     return { kind: 'real', id: node.id, node, reason, score };
   });
-  const visibleFrontiers = [...frontiers.values()].sort((a, b) => a.id.localeCompare(b.id)).slice(0, Math.max(0, hardBudget - realNodes.length));
+  const visibleFrontiers = [...frontiers.values()].sort((a, b) => b.aggregateScore - a.aggregateScore || a.id.localeCompare(b.id)).slice(0, Math.max(0, hardBudget - realNodes.length));
   if (frontiers.size > visibleFrontiers.length) warnings.push({ code: 'hard-budget', message: `${frontiers.size - visibleFrontiers.length} frontier controls were omitted by the hard budget.` });
   const frontierNodes: VisibleNode[] = visibleFrontiers.map((frontier) => ({ kind: 'frontier', id: frontier.id, frontier, reason: { kind: 'frontier', detail: `Summarizes ${frontier.hiddenCount} hidden ${frontier.category}.` } }));
   const rootSet = new Set(roots);

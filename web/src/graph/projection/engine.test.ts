@@ -81,3 +81,28 @@ test('question presets share depth and budget semantics and degrade missing evid
   assert.ok(projectVisibleGraph(index, projectionDefinition('hot-path'), { activeNodeId: 'root' }).warnings.some((warning) => warning.code === 'missing-evidence'));
   assert.ok(projectVisibleGraph(index, projectionDefinition('cross-team-dependencies'), { activeNodeId: 'root' }).warnings.some((warning) => warning.code === 'missing-evidence'));
 });
+
+test('drills one high-fan-in service through package groups without exposing siblings', () => {
+  const services = ['payments', 'checkout', 'fulfillment'].map((id) => node(id, 'service'));
+  const callers = services.flatMap((service) => Array.from({ length: 8 }, (_, position) => ({
+    id: `${service.id}-${position}`,
+    kind: 'function' as const,
+    label: `${service.id}-${position}`,
+    service: service.id,
+    pkg: `${service.id}-pkg-${position % 2}`,
+  })));
+  const root = node('utility');
+  const edges = callers.map((caller) => edge(caller.id, root.id));
+  const index = createGraphIndex([root, ...services, ...callers], edges);
+  const collapsed = projectVisibleGraph(index, projectionDefinition('dependencies'), { activeNodeId: root.id, upstreamDepth: 1, downstreamDepth: 0, branchLimit: 4 });
+  const paymentGroup = collapsed.nodes.find((item) => item.kind === 'frontier' && item.frontier.value === 'payments');
+  assert.equal(paymentGroup?.kind, 'frontier');
+  assert.deepEqual(realIds(collapsed), ['utility']);
+  const serviceExpanded = projectVisibleGraph(index, projectionDefinition('dependencies'), { activeNodeId: root.id, upstreamDepth: 1, downstreamDepth: 0, branchLimit: 4, frontierExpansions: { [paymentGroup!.id]: 1 } });
+  const packageGroup = serviceExpanded.nodes.find((item) => item.kind === 'frontier' && item.frontier.parentFrontierId === paymentGroup!.id);
+  assert.equal(packageGroup?.kind, 'frontier');
+  const leafExpanded = projectVisibleGraph(index, projectionDefinition('dependencies'), { activeNodeId: root.id, upstreamDepth: 1, downstreamDepth: 0, branchLimit: 4, frontierExpansions: { [paymentGroup!.id]: 1, [packageGroup!.id]: 1 } });
+  assert.ok(realIds(leafExpanded).some((id) => id.startsWith('payments-')));
+  assert.ok(realIds(leafExpanded).every((id) => id === 'utility' || id.startsWith('payments-')));
+  assert.ok(leafExpanded.nodes.length <= 40);
+});

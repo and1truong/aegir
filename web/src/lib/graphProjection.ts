@@ -28,6 +28,7 @@ export interface FrontierAggregate {
   direction: ProjectionDirection;
   hiddenCount: number;
   label: string;
+  withinDepth: boolean;
 }
 
 export interface GraphProjection {
@@ -61,6 +62,7 @@ function compatibilityProjection(visibleGraph: VisibleGraph): GraphProjection {
     direction: frontier.direction,
     hiddenCount: frontier.hiddenCount,
     label: frontier.label,
+    withinDepth: frontier.withinDepth,
   }));
   const realEdges = visibleGraph.edges.flatMap((item) => item.kind === 'real' ? [item.edge] : []);
   return {

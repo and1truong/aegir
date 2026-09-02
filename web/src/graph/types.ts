@@ -62,12 +62,20 @@ export interface CandidateExplanation {
 export interface FrontierGroup {
   id: string;
   parentId: string;
+  parentFrontierId?: string;
   direction: ProjectionDirection;
   category: string;
+  dimension: 'service' | 'package' | 'team' | 'relation' | 'remainder';
+  value: string;
+  visibleCount: number;
   hiddenCount: number;
   memberNodeIds: string[];
   label: string;
   withinDepth: boolean;
+  aggregateScore: number;
+  relationMix: Partial<Record<EdgeKind, number>>;
+  evidenceIds: string[];
+  hasChildren: boolean;
 }
 
 export type VisibleNode =

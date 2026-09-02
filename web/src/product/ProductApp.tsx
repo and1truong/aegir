@@ -565,7 +565,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   useEffect(() => {
     const request = ++reviewRequest.current;
     setReview(undefined);
-    setLoading(false); setError(undefined);
+    setLoading(false); setError(undefined); setTimelineError(undefined);
     if (!active) return;
     fetch(`/api/repositories/${active.id}/reviews/latest`)
       .then((response) => response.ok ? response.json() : undefined)
@@ -719,7 +719,7 @@ export function ProductApp() {
         <div className="mt-auto border-t border-zinc-800 p-2"><button onClick={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-zinc-500 hover:bg-zinc-900">{theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}{theme === 'dark' ? 'Light' : 'Dark'} theme</button></div>
       </aside>}
       <div className="relative min-w-0 flex-1">
-        {(snapshotError || repositorySyncError || timelineSyncError) && <div className="absolute right-3 top-3 z-50 rounded-md border border-amber-900/60 bg-zinc-950/95 px-3 py-2 text-[10px] text-amber-200">{snapshotError && <div>Snapshot {snapshotError.snapshotId} failed to load: {snapshotError.message} <button type="button" onClick={() => void selectSnapshot(snapshotError.snapshotId)} className="ml-1 underline">Retry</button></div>}{repositorySyncError && <div>Re-indexed, but repository sync failed: {repositorySyncError} <button type="button" onClick={() => void refreshRepositories().catch(() => {})} className="ml-1 underline">Retry</button></div>}{timelineSyncError && <div>Re-indexed, but timeline sync failed: {timelineSyncError} <button type="button" onClick={() => void refreshTimeline().catch(() => {})} className="ml-1 underline">Retry</button></div>}</div>}
+        {(snapshotError || repositorySyncError || timelineSyncError) && <div className="absolute right-3 top-3 z-50 rounded-md border border-amber-900/60 bg-zinc-950/95 px-3 py-2 text-[10px] text-amber-200">{snapshotError && <div>Snapshot {snapshotError.snapshotId} failed to load: {snapshotError.message} <button type="button" onClick={() => void selectSnapshot(snapshotError.snapshotId)} className="ml-1 underline">Retry</button></div>}{repositorySyncError && <div>Re-indexed, but repository sync failed: {repositorySyncError} <button type="button" onClick={() => void refreshRepositories().catch(() => {})} className="ml-1 underline">Retry</button></div>}{timelineSyncError && <div>Timeline sync failed: {timelineSyncError} <button type="button" onClick={() => void refreshTimeline().catch(() => {})} className="ml-1 underline">Retry</button></div>}</div>}
         {!railOpen && !focusMode && <button onClick={() => setRailOpen(true)} aria-label="Show navigation rail" title="Show navigation rail" className="absolute bottom-3 left-3 z-50 rounded-md border border-zinc-700 bg-zinc-950/90 p-2 text-zinc-400 shadow-lg hover:bg-zinc-800 hover:text-zinc-100"><PanelLeftOpen className="h-4 w-4" /></button>}
         {loading && !snapshot ? <div className="flex h-full items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-sky-300" /></div> : error ? <div className="p-5 text-red-300">{error}</div> : screen === 'overview' ? <Overview openExplorer={() => setScreen('explorer')} /> : screen === 'explorer' ? <Explorer {...graphViewProps} /> : screen === 'rules' ? <RulesScreen /> : screen === 'search' ? <SearchScreen /> : screen === 'settings' ? <SettingsScreen /> : <ReviewScreen {...graphViewProps} />}
       </div>

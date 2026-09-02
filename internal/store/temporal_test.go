@@ -62,6 +62,45 @@ func TestHistoricalSnapshotsDoNotReplaceCurrentGraph(t *testing.T) {
 	}
 }
 
+func TestPreviousComparableSnapshotStaysInTheMatchingStream(t *testing.T) {
+	value, repository := openTemporalStore(t)
+	ctx := context.Background()
+	firstIndex, err := value.SaveSnapshot(ctx, repository.ID, temporalSnapshot("index-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := value.SaveHistoricalSnapshot(ctx, repository.ID, temporalSnapshot("review-base"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := value.SaveHistoricalSnapshot(ctx, repository.ID, temporalSnapshot("review-head"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := review.Compare(repository.ID, "base", "head", base.ID, head.ID, temporalSnapshot("review-base"), temporalSnapshot("review-head"))
+	if err := value.SaveReview(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	secondIndex, err := value.SaveSnapshot(ctx, repository.ID, temporalSnapshot("index-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexBase, err := value.PreviousComparableSnapshot(ctx, repository.ID, secondIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if indexBase.ID != firstIndex.ID {
+		t.Fatalf("index baseline=%d want %d", indexBase.ID, firstIndex.ID)
+	}
+	reviewBase, err := value.PreviousComparableSnapshot(ctx, repository.ID, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewBase.ID != base.ID {
+		t.Fatalf("review baseline=%d want %d", reviewBase.ID, base.ID)
+	}
+}
+
 func TestMigrationClassifiesLegacyReviewSnapshotsBeforeRecoveringCurrent(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "legacy.db")
 	db, err := sql.Open("sqlite", databasePath)

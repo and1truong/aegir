@@ -459,9 +459,15 @@ func (s *Store) CompactTimeline(ctx context.Context, repositoryID string, keepRe
 	return CompactionResult{DeletedReviews: reviewCount, DeletedSnapshots: snapshotCount, ReclaimedBytes: max(0, beforeBytes-afterBytes)}, nil
 }
 
-func (s *Store) PreviousSnapshot(ctx context.Context, repositoryID string, beforeID int64) (Snapshot, error) {
+func (s *Store) PreviousComparableSnapshot(ctx context.Context, repositoryID string, head Snapshot) (Snapshot, error) {
 	var id int64
-	if err := s.db.QueryRowContext(ctx, `SELECT id FROM snapshots WHERE repository_id=? AND id<? ORDER BY id DESC LIMIT 1`, repositoryID, beforeID).Scan(&id); err != nil {
+	var err error
+	if head.Ref.Kind == "review" {
+		err = s.db.QueryRowContext(ctx, `SELECT base_snapshot_id FROM reviews WHERE repository_id=? AND head_snapshot_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, repositoryID, head.ID).Scan(&id)
+	} else {
+		err = s.db.QueryRowContext(ctx, `SELECT id FROM snapshots WHERE repository_id=? AND snapshot_kind=? AND id<? ORDER BY id DESC LIMIT 1`, repositoryID, head.Ref.Kind, head.ID).Scan(&id)
+	}
+	if err != nil {
 		return Snapshot{}, err
 	}
 	return s.SnapshotByID(ctx, repositoryID, id)

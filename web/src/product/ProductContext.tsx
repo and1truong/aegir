@@ -71,6 +71,7 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const snapshotRequest = useRef(0);
+  const timelineRequest = useRef(0);
   const active = repositories.find((repository) => repository.id === activeID) ?? repositories[0];
   const activeRepository = useRef(active?.id);
   activeRepository.current = active?.id;
@@ -89,15 +90,19 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const request = ++snapshotRequest.current;
-    setSnapshotError(undefined); setError(undefined);
-    if (!active) { setSnapshot(undefined); setTimeline(undefined); return; }
+    const timelineGeneration = ++timelineRequest.current;
+    setSnapshot(undefined); setTimeline(undefined); setSnapshotError(undefined); setRepositorySyncError(undefined); setTimelineSyncError(undefined); setError(undefined);
+    if (!active) { setLoading(false); return; }
     window.localStorage.setItem('aegir-repository', active.id);
-    if (active.status !== 'ready') { setSnapshot(undefined); setTimeline(undefined); return; }
+    if (active.status !== 'ready') { setLoading(false); return; }
     setLoading(true);
-    Promise.all([api<ProductSnapshot>(`/api/repositories/${active.id}/graph`), api<Timeline>(`/api/repositories/${active.id}/timeline`)])
-      .then(([nextSnapshot, nextTimeline]) => { if (request === snapshotRequest.current) { setSnapshot(nextSnapshot); setTimeline(nextTimeline); setError(undefined) } })
+    api<ProductSnapshot>(`/api/repositories/${active.id}/graph`)
+      .then((nextSnapshot) => { if (request === snapshotRequest.current) { setSnapshot(nextSnapshot); setError(undefined) } })
       .catch((cause) => { if (request === snapshotRequest.current) setError(cause.message) })
       .finally(() => { if (request === snapshotRequest.current) setLoading(false) });
+    api<Timeline>(`/api/repositories/${active.id}/timeline`)
+      .then((nextTimeline) => { if (timelineGeneration === timelineRequest.current && activeRepository.current === active.id) { setTimeline(nextTimeline); setTimelineSyncError(undefined) } })
+      .catch((cause) => { if (timelineGeneration === timelineRequest.current && activeRepository.current === active.id) setTimelineSyncError(cause instanceof Error ? cause.message : String(cause)) });
   }, [active?.id, active?.status]);
 
   const addRepository = useCallback(async (path: string) => {
@@ -112,8 +117,9 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
   const refreshTimeline = useCallback(async () => {
     if (!active) return;
     const repositoryID = active.id;
+    const request = ++timelineRequest.current;
     const nextTimeline = await api<Timeline>(`/api/repositories/${repositoryID}/timeline`);
-    if (activeRepository.current === repositoryID) { setTimeline(nextTimeline); setTimelineSyncError(undefined) }
+    if (request === timelineRequest.current && activeRepository.current === repositoryID) { setTimeline(nextTimeline); setTimelineSyncError(undefined) }
   }, [active]);
 
   const reindex = useCallback(async (coveragePath?: string, telemetryPath?: string) => {
@@ -151,7 +157,7 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
     finally { if (request === snapshotRequest.current) setLoading(false) }
   }, [active, snapshot?.id]);
 
-  const selectRepository = useCallback((id: string) => { if (id === activeRepository.current) return; snapshotRequest.current += 1; setSnapshotError(undefined); setError(undefined); setActiveID(id) }, []);
+  const selectRepository = useCallback((id: string) => { if (id === activeRepository.current) return; snapshotRequest.current += 1; timelineRequest.current += 1; setSnapshotError(undefined); setRepositorySyncError(undefined); setTimelineSyncError(undefined); setError(undefined); setActiveID(id) }, []);
   const value = useMemo<ProductState>(() => ({ repositories, active, snapshot, timeline, snapshotError, repositorySyncError, timelineSyncError, loading, error, selectRepository, selectSnapshot, addRepository, reindex, refreshRepositories, refreshTimeline, clearError: () => setError(undefined) }), [repositories, active, snapshot, timeline, snapshotError, repositorySyncError, timelineSyncError, loading, error, selectRepository, selectSnapshot, addRepository, reindex, refreshRepositories, refreshTimeline]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

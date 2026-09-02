@@ -219,7 +219,7 @@ func (s *Server) contractDiff(w http.ResponseWriter, r *http.Request) {
 		}
 		base, err = s.store.SnapshotByID(r.Context(), repositoryID, id)
 	} else {
-		base, err = s.store.PreviousSnapshot(r.Context(), repositoryID, head.ID)
+		base, err = s.store.PreviousComparableSnapshot(r.Context(), repositoryID, head)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, 200, contractdiff.Diff{BaseSnapshotID: 0, HeadSnapshotID: head.ID, Changes: []contractdiff.Change{}})

@@ -145,6 +145,23 @@ func TestSaveReviewRemovesUnreferencedSupersededSnapshotPair(t *testing.T) {
 	}
 }
 
+func TestSaveReviewSnapshotsRollsBackBothSnapshots(t *testing.T) {
+	value, repository := openTemporalStore(t)
+	ctx := context.Background()
+	head := temporalSnapshot("head")
+	head.Nodes = append(head.Nodes, head.Nodes[0])
+	if _, err := value.SaveReviewSnapshots(ctx, repository.ID, "base", "head", temporalSnapshot("base"), head); err == nil {
+		t.Fatal("expected duplicate head node to fail")
+	}
+	timeline, err := value.Timeline(ctx, repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Snapshots) != 0 || len(timeline.Reviews) != 0 {
+		t.Fatalf("partial review persisted: snapshots=%d reviews=%d", len(timeline.Snapshots), len(timeline.Reviews))
+	}
+}
+
 func TestMigrationClassifiesLegacyReviewSnapshotsBeforeRecoveringCurrent(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "legacy.db")
 	db, err := sql.Open("sqlite", databasePath)

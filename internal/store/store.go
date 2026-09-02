@@ -283,6 +283,17 @@ func (s *Store) saveSnapshot(ctx context.Context, repositoryID string, indexed a
 		return Snapshot{}, err
 	}
 	defer tx.Rollback()
+	snapshotID, err := saveSnapshotTx(ctx, tx, repositoryID, indexed, updateRepository)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Snapshot{}, err
+	}
+	return s.SnapshotByID(ctx, repositoryID, snapshotID)
+}
+
+func saveSnapshotTx(ctx context.Context, tx *sql.Tx, repositoryID string, indexed analyzer.Snapshot, updateRepository bool) (int64, error) {
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 	statsJSON, _ := json.Marshal(indexed.Stats)
 	fingerprintBody, _ := json.Marshal(indexed)
@@ -294,60 +305,88 @@ func (s *Store) saveSnapshot(ctx context.Context, repositoryID string, indexed a
 		kind = "index"
 		isCurrent = 1
 		if _, err := tx.ExecContext(ctx, `UPDATE snapshots SET is_current=0 WHERE repository_id=?`, repositoryID); err != nil {
-			return Snapshot{}, err
+			return 0, err
 		}
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO snapshots(repository_id,created_at,head,stats_json,snapshot_kind,is_current,fingerprint) VALUES(?,?,?,?,?,?,?)`, repositoryID, createdAt, indexed.Repository.Head, string(statsJSON), kind, isCurrent, fingerprint)
 	if err != nil {
-		return Snapshot{}, err
+		return 0, err
 	}
 	snapshotID, err := result.LastInsertId()
 	if err != nil {
-		return Snapshot{}, err
+		return 0, err
 	}
 	for _, node := range indexed.Nodes {
 		body, _ := json.Marshal(node)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO nodes(snapshot_id,node_id,kind,label,body_json) VALUES(?,?,?,?,?)`, snapshotID, node.ID, node.Kind, node.Label, string(body)); err != nil {
-			return Snapshot{}, err
+			return 0, err
 		}
 	}
 	for _, edge := range indexed.Edges {
 		body, _ := json.Marshal(edge)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO edges(snapshot_id,edge_id,source,target,kind,body_json) VALUES(?,?,?,?,?,?)`, snapshotID, edge.ID, edge.Source, edge.Target, edge.Kind, string(body)); err != nil {
-			return Snapshot{}, err
+			return 0, err
 		}
 	}
 	for _, evidence := range indexed.Evidence {
 		body, _ := json.Marshal(evidence)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO evidence(snapshot_id,evidence_id,subject_kind,subject_id,source,strength,body_json) VALUES(?,?,?,?,?,?,?)`, snapshotID, evidence.ID, evidence.Subject.Kind, evidence.Subject.ID, evidence.Source, evidence.Strength, string(body)); err != nil {
-			return Snapshot{}, err
+			return 0, err
 		}
 	}
 	analysisJSON, _ := json.Marshal(indexed.Analysis)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO analyses(snapshot_id,body_json) VALUES(?,?)`, snapshotID, string(analysisJSON)); err != nil {
-		return Snapshot{}, err
+		return 0, err
 	}
 	if updateRepository {
 		if _, err := tx.ExecContext(ctx, `UPDATE repositories SET module=?,head=?,status='ready',last_indexed_at=?,error='' WHERE id=?`, indexed.Repository.Module, indexed.Repository.Head, createdAt, repositoryID); err != nil {
-			return Snapshot{}, err
+			return 0, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return Snapshot{}, err
+	return snapshotID, nil
+}
+
+func (s *Store) SaveReviewSnapshots(ctx context.Context, repositoryID, baseRef, headRef string, baseIndexed, headIndexed analyzer.Snapshot) (review.Review, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return review.Review{}, err
 	}
-	return s.SnapshotByID(ctx, repositoryID, snapshotID)
+	defer tx.Rollback()
+	baseID, err := saveSnapshotTx(ctx, tx, repositoryID, baseIndexed, false)
+	if err != nil {
+		return review.Review{}, err
+	}
+	headID, err := saveSnapshotTx(ctx, tx, repositoryID, headIndexed, false)
+	if err != nil {
+		return review.Review{}, err
+	}
+	value := review.Compare(repositoryID, baseRef, headRef, baseID, headID, baseIndexed, headIndexed)
+	if err := saveReviewTx(ctx, tx, value); err != nil {
+		return review.Review{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return review.Review{}, err
+	}
+	return value, nil
 }
 
 func (s *Store) SaveReview(ctx context.Context, value review.Review) error {
-	body, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := saveReviewTx(ctx, tx, value); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func saveReviewTx(ctx context.Context, tx *sql.Tx, value review.Review) error {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
 	var previousBaseID, previousHeadID int64
 	err = tx.QueryRowContext(ctx, `SELECT base_snapshot_id,head_snapshot_id FROM reviews WHERE repository_id=? AND id=?`, value.RepositoryID, value.ID).Scan(&previousBaseID, &previousHeadID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -362,7 +401,7 @@ ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,base_snapshot_id=ex
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) Review(ctx context.Context, repositoryID, id string) (review.Review, error) {

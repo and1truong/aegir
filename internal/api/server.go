@@ -263,18 +263,8 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 422, err)
 		return
 	}
-	base, err := s.store.SaveHistoricalSnapshot(r.Context(), repository.ID, baseIndexed)
+	value, err := s.store.SaveReviewSnapshots(r.Context(), repository.ID, body.BaseRef, body.HeadRef, baseIndexed, headIndexed)
 	if err != nil {
-		writeError(w, 500, err)
-		return
-	}
-	head, err := s.store.SaveHistoricalSnapshot(r.Context(), repository.ID, headIndexed)
-	if err != nil {
-		writeError(w, 500, err)
-		return
-	}
-	value := review.Compare(repository.ID, body.BaseRef, body.HeadRef, base.ID, head.ID, baseIndexed, headIndexed)
-	if err := s.store.SaveReview(r.Context(), value); err != nil {
 		writeError(w, 500, err)
 		return
 	}

@@ -117,8 +117,12 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
     if (!active) return;
     const repositoryID = active.id;
     const request = ++timelineRequest.current;
-    const nextTimeline = await api<Timeline>(`/api/repositories/${repositoryID}/timeline`);
-    if (request === timelineRequest.current && activeRepository.current === repositoryID) { setTimeline(nextTimeline); setTimelineSyncError(undefined) }
+    try {
+      const nextTimeline = await api<Timeline>(`/api/repositories/${repositoryID}/timeline`);
+      if (request === timelineRequest.current && activeRepository.current === repositoryID) { setTimeline(nextTimeline); setTimelineSyncError(undefined) }
+    } catch (cause) {
+      if (request === timelineRequest.current && activeRepository.current === repositoryID) throw cause;
+    }
   }, [active]);
 
   const reindex = useCallback(async (coveragePath?: string, telemetryPath?: string) => {

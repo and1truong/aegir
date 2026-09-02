@@ -11,6 +11,7 @@ export type InvestigationAction =
   | { type: 'setDepth'; direction: 'upstream' | 'downstream'; depth: ProjectionDepth }
   | { type: 'setRelationshipOverride'; kind: EdgeKind; value: RelationshipOverride }
   | { type: 'clearRelationshipOverrides' }
+  | { type: 'setEvidencePolicy'; maximumLevel?: InvestigationState['evidencePolicy']['maximumLevel']; includeStale?: boolean }
   | { type: 'expandFrontier'; frontierId: string; beyondDepth?: boolean }
   | { type: 'collapseFrontier'; frontierId: string }
   | { type: 'clearFrontiers' };
@@ -43,6 +44,8 @@ export function investigationReducer(state: InvestigationState, action: Investig
     }
     case 'clearRelationshipOverrides':
       return { ...state, relationshipOverrides: {}, expandedFrontiers: {} };
+    case 'setEvidencePolicy':
+      return { ...state, evidencePolicy: { maximumLevel: action.maximumLevel ?? state.evidencePolicy.maximumLevel, includeStale: action.includeStale ?? state.evidencePolicy.includeStale }, expandedFrontiers: {} };
     case 'expandFrontier': {
       const current = state.expandedFrontiers[action.frontierId];
       return {

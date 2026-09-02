@@ -25,6 +25,11 @@ export interface GraphIndexFacts {
   findingNodeIds?: Iterable<string>;
 }
 
+export interface EvidencePolicy {
+  maximumLevel: 'proven' | 'observed' | 'inferred';
+  includeStale: boolean;
+}
+
 export type RelevanceSignal = 'change' | 'direct' | 'runtime' | 'contract' | 'failure' | 'ownership' | 'architecture' | 'structural';
 export type RelevanceWeights = Partial<Record<RelevanceSignal, number>>;
 
@@ -87,7 +92,7 @@ export type VisibleEdge =
   | { kind: 'frontier-link'; id: string; source: string; target: string; canonicalEdgeIds: string[]; reason: InclusionReason; evidenceIds: string[] };
 
 export interface ProjectionWarning {
-  code: 'missing-root' | 'root-budget' | 'hard-budget' | 'missing-evidence';
+  code: 'missing-root' | 'root-budget' | 'hard-budget' | 'missing-evidence' | 'evidence-disconnected';
   message: string;
 }
 

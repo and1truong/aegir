@@ -20,6 +20,10 @@ interface GraphScopeControlsProps {
   toggleRelationship: (kind: EdgeKind) => void;
   expandedBranches?: ExpandedBranch[];
   collapseBranch?: (key: string) => void;
+  evidenceLevel?: 'proven' | 'observed' | 'inferred';
+  includeStale?: boolean;
+  setEvidenceLevel?: (level: 'proven' | 'observed' | 'inferred') => void;
+  setIncludeStale?: (include: boolean) => void;
 }
 
 function DepthControl({ label, value, setValue }: { label: string; value: ProjectionDepth; setValue: (depth: ProjectionDepth) => void }) {
@@ -59,6 +63,7 @@ export function GraphScopeControls(props: GraphScopeControlsProps) {
         </button>
       ))}
       <span className="font-mono text-[9px] text-zinc-600">context links are semantic bridges</span>
+      {props.evidenceLevel && <><span className="mx-1 h-4 w-px bg-zinc-800" /><label className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider text-zinc-600">Evidence<select aria-label="Evidence level" value={props.evidenceLevel} onChange={(event) => props.setEvidenceLevel?.(event.target.value as 'proven' | 'observed' | 'inferred')} className="h-6 rounded border border-zinc-700 bg-zinc-950 px-1.5 font-mono text-[9.5px] normal-case tracking-normal text-zinc-300 outline-none"><option value="proven">Proven only</option><option value="observed">+ Observed</option><option value="inferred">+ Inferred</option></select></label><label className="flex items-center gap-1 text-[9.5px] text-zinc-500"><input type="checkbox" checked={props.includeStale} onChange={(event) => props.setIncludeStale?.(event.target.checked)} /> stale</label></>}
       {props.expandedBranches?.map((branch) => (
         <button
           key={branch.key}
@@ -72,4 +77,3 @@ export function GraphScopeControls(props: GraphScopeControlsProps) {
     </div>
   );
 }
-

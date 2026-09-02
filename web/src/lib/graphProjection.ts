@@ -2,7 +2,7 @@ import type { EdgeKind, SysEdge, SysNode } from '../data/types';
 import { createGraphIndex } from '../graph/index.ts';
 import { projectionDefinition } from '../graph/projection/definitions.ts';
 import { frontierId, projectVisibleGraph, type FrontierExpansions } from '../graph/projection/engine.ts';
-import type { GraphIndex, ProjectionDepth, VisibleGraph } from '../graph/types';
+import type { EvidencePolicy, GraphIndex, ProjectionDepth, VisibleGraph } from '../graph/types';
 
 export type { ProjectionDepth } from '../graph/types';
 export type ProjectionDirection = 'upstream' | 'downstream';
@@ -19,6 +19,7 @@ export interface GraphProjectionOptions {
   nodeBudget?: number;
   branchLimit?: number;
   branchPageSize?: number;
+  evidencePolicy?: EvidencePolicy;
 }
 
 export interface FrontierAggregate {
@@ -91,6 +92,7 @@ export function projectGraphIndex(index: GraphIndex, options: GraphProjectionOpt
     nodeBudget: options.nodeBudget,
     branchLimit: options.branchLimit,
     branchPageSize: options.branchPageSize,
+    evidencePolicy: options.evidencePolicy,
   }));
 }
 

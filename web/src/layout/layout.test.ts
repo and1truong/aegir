@@ -37,3 +37,10 @@ test('missing anchor leaves deterministic positions available for fit fallback',
   assert.equal(positioned.anchor, null);
   assert.equal(positioned.positions.size, nodes.length);
 });
+
+test('pin soft constraints use stable semantic lane order', () => {
+  clearLayoutCache();
+  const positioned = positionGraph('pins', nodes, links, 'dependency-LR', 'root', ['b', 'a']);
+  assert.ok(positioned.positions.get('a')!.y <= positioned.positions.get('b')!.y);
+  assert.equal(layoutComputationCount(), 1);
+});

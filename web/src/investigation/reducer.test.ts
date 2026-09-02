@@ -99,3 +99,13 @@ test('missing focal fallback prefers locked path, then pin, then root', () => {
   state.pinnedNodeIds = [];
   assert.equal(reconcileMissingFocal(state, new Set(['root']), 'root'), 'root');
 });
+
+test('pins are deterministic, capped at five, removable, and clearable', () => {
+  let state = createInvestigationState();
+  for (let index = 0; index < 6; index++) state = investigationReducer(state, { type: 'pinNode', nodeId: `node-${index}` });
+  assert.deepEqual(state.pinnedNodeIds, ['node-0', 'node-1', 'node-2', 'node-3', 'node-4']);
+  state = investigationReducer(state, { type: 'unpinNode', nodeId: 'node-2' });
+  assert.equal(state.pinnedNodeIds.includes('node-2'), false);
+  state = investigationReducer(state, { type: 'clearPins' });
+  assert.deepEqual(state.pinnedNodeIds, []);
+});

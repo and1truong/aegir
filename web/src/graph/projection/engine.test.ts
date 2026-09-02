@@ -106,3 +106,11 @@ test('drills one high-fan-in service through package groups without exposing sib
   assert.ok(realIds(leafExpanded).every((id) => id === 'utility' || id.startsWith('payments-')));
   assert.ok(leafExpanded.nodes.length <= 40);
 });
+
+test('pins reserve visible budget independently of the focal traversal', () => {
+  const nodes = [node('root'), node('next'), node('reference'), node('missing-context')];
+  const graph = projectVisibleGraph(createGraphIndex(nodes, [edge('root', 'next')]), projectionDefinition('dependencies'), { activeNodeId: 'root', pinnedNodeIds: ['reference'], upstreamDepth: 0, downstreamDepth: 1, nodeBudget: 3 });
+  assert.deepEqual(realIds(graph), ['root', 'next', 'reference']);
+  assert.equal(graph.nodes.find((item) => item.id === 'reference')?.reason.kind, 'pin');
+  assert.ok(graph.revision.includes('pins:reference'));
+});

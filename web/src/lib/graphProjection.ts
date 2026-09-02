@@ -20,6 +20,7 @@ export interface GraphProjectionOptions {
   branchLimit?: number;
   branchPageSize?: number;
   evidencePolicy?: EvidencePolicy;
+  pinnedNodeIds?: string[];
 }
 
 export interface FrontierAggregate {
@@ -93,6 +94,7 @@ export function projectGraphIndex(index: GraphIndex, options: GraphProjectionOpt
     branchLimit: options.branchLimit,
     branchPageSize: options.branchPageSize,
     evidencePolicy: options.evidencePolicy,
+    pinnedNodeIds: options.pinnedNodeIds,
   }));
 }
 

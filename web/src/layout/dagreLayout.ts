@@ -10,14 +10,17 @@ function rankdir(strategy: LayoutStrategy) {
   return strategy === 'explicit-TB' ? 'TB' as const : 'LR' as const;
 }
 
-export function positionGraph(topologyRevision: string, nodes: readonly LayoutNode[], links: readonly LayoutLink[], strategy: LayoutStrategy, anchorId?: string): PositionedLayout {
-  const key = `${topologyRevision}|${strategy}|${anchorId ?? ''}`;
+export function positionGraph(topologyRevision: string, nodes: readonly LayoutNode[], links: readonly LayoutLink[], strategy: LayoutStrategy, anchorId?: string, pinnedNodeIds: readonly string[] = []): PositionedLayout {
+  const key = `${topologyRevision}|${strategy}|${anchorId ?? ''}|${[...pinnedNodeIds].sort().join(',')}`;
   const cached = cache.get(key);
   if (cached) return cached;
   computations++;
   const orderedNodes = [...nodes].sort((a, b) => a.id.localeCompare(b.id));
   const orderedLinks = [...links].sort((a, b) => a.source.localeCompare(b.source) || a.target.localeCompare(b.target));
   const raw = layout(orderedNodes, orderedLinks, { rankdir: rankdir(strategy), ranksep: 64, nodesep: 22 });
+  const pins = [...new Set(pinnedNodeIds)].filter((id) => raw.has(id)).sort();
+  const pinSlots = pins.map((id) => raw.get(id)!.y).sort((a, b) => a - b);
+  pins.forEach((id, index) => raw.set(id, { ...raw.get(id)!, y: pinSlots[index] }));
   const normalized = normalizeToAnchor(raw, orderedNodes, anchorId);
   const result = { topologyRevision, layoutRevision: ++revision, positions: normalized.positions, anchor: normalized.anchor };
   cache.set(key, result);

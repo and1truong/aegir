@@ -13,6 +13,9 @@ export type InvestigationAction =
   | { type: 'clearRelationshipOverrides' }
   | { type: 'setEvidencePolicy'; maximumLevel?: InvestigationState['evidencePolicy']['maximumLevel']; includeStale?: boolean }
   | { type: 'setAbstraction'; abstraction: InvestigationState['abstraction'] }
+  | { type: 'pinNode'; nodeId: string }
+  | { type: 'unpinNode'; nodeId: string }
+  | { type: 'clearPins' }
   | { type: 'expandFrontier'; frontierId: string; beyondDepth?: boolean }
   | { type: 'collapseFrontier'; frontierId: string }
   | { type: 'clearFrontiers' };
@@ -49,6 +52,12 @@ export function investigationReducer(state: InvestigationState, action: Investig
       return { ...state, evidencePolicy: { maximumLevel: action.maximumLevel ?? state.evidencePolicy.maximumLevel, includeStale: action.includeStale ?? state.evidencePolicy.includeStale }, expandedFrontiers: {} };
     case 'setAbstraction':
       return { ...state, abstraction: action.abstraction, expandedFrontiers: {} };
+    case 'pinNode':
+      return state.pinnedNodeIds.includes(action.nodeId) || state.pinnedNodeIds.length >= 5 ? state : { ...state, pinnedNodeIds: [...state.pinnedNodeIds, action.nodeId] };
+    case 'unpinNode':
+      return { ...state, pinnedNodeIds: state.pinnedNodeIds.filter((id) => id !== action.nodeId) };
+    case 'clearPins':
+      return { ...state, pinnedNodeIds: [] };
     case 'expandFrontier': {
       const current = state.expandedFrontiers[action.frontierId];
       return {

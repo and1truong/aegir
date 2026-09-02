@@ -54,7 +54,7 @@ export interface SysNode {
   /** operation label used in data-flow mode */
   op?: string;
   tags?: string[];
-  meta?: Record<string, string | number | string[]>;
+  meta?: Record<string, string | number | boolean | string[]>;
   representedNodeIds?: string[];
   abstractionLevel?: 'service' | 'component' | 'package' | 'symbol';
 }

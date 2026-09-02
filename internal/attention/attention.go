@@ -395,7 +395,10 @@ func unitForFile(path string, files, packageDirs map[string]string) string {
 	if unit := files[path]; unit != "" {
 		return unit
 	}
-	best, bestUnit := "", packageDirs[""]
+	best, bestUnit := "", ""
+	if !strings.Contains(path, "/") {
+		bestUnit = packageDirs[""]
+	}
 	for directory, unit := range packageDirs {
 		if directory != "" && (path == directory || strings.HasPrefix(path, directory+"/")) && (len(directory) > len(best) || len(directory) == len(best) && unit < bestUnit) {
 			best, bestUnit = directory, unit

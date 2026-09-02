@@ -120,7 +120,7 @@ func TestCalculateMapsContractsAndHistoryToPackagesWithoutFunctions(t *testing.T
 	}
 	changes := history.Result{Events: []history.ChangeEvent{{
 		ID: "git:new", OccurredAt: now, AuthorKey: "author",
-		Files: []history.FileChange{{Path: "internal/model/types.go", Additions: 12}, {Path: "schema.sql", Additions: 4}},
+		Files: []history.FileChange{{Path: "internal/model/types.go", Additions: 12}, {Path: "schema.sql", Additions: 4}, {Path: "web/src/App.tsx", Additions: 1000}},
 	}}}
 	landscape := Calculate("repo", 1, snapshot, &changes, 90, now)
 	units := map[string]Unit{}
@@ -135,6 +135,9 @@ func TestCalculateMapsContractsAndHistoryToPackagesWithoutFunctions(t *testing.T
 		if churn.RawValue == 0 {
 			t.Fatalf("history was not attributed to package %s: %#v", packageID, units[packageID])
 		}
+	}
+	if churn := factorByID(units[root.ID].ChangeVelocity, "meaningful-churn"); churn.RawValue != 4 {
+		t.Fatalf("nested unmatched file leaked into root package: %#v", churn)
 	}
 }
 

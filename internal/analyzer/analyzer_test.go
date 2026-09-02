@@ -11,6 +11,7 @@ func TestRunIndexesFunctionsCallsTestsAndContracts(t *testing.T) {
 	root := t.TempDir()
 	for path, body := range map[string]string{
 		".git/HEAD":           "0123456789abcdef\n",
+		".github/CODEOWNERS":  "**/*.go @go-team\n/api/openapi.yaml @api-team\n/models/types.go @models-team\n",
 		"go.mod":              "module example.com/shop\n\ngo 1.24\n",
 		"order/order.go":      "package order\nimport (\"database/sql\"; \"net/http\")\ntype Publisher interface { Publish(string) }\nfunc Create(db *sql.DB, publisher Publisher) { Validate(); db.Exec(`INSERT INTO orders (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id=excluded.id`); publisher.Publish(\"order.created\"); http.Get(\"https://fraud.example/check\"); headers.Set(\"origin\", \"https://not-a-call.example\") }\nfunc Validate() {}\n",
 		"order/order_test.go": "package order\nimport \"testing\"\nfunc TestCreate(t *testing.T) { Create() }\n",
@@ -57,20 +58,25 @@ func TestRunIndexesFunctionsCallsTestsAndContracts(t *testing.T) {
 	if len(snapshot.Analysis.Contracts) != 1 || snapshot.Analysis.Contracts[0].Fingerprint == "" || snapshot.Analysis.Contracts[0].Shape["/openapi"] == "" {
 		t.Fatal("expected normalized contract shape")
 	}
-	contractNode, packagePaths := Node{}, map[string]bool{}
+	contractNode, packages := Node{}, map[string]Node{}
 	for _, node := range snapshot.Nodes {
 		if node.ID == snapshot.Analysis.Contracts[0].Node {
 			contractNode = node
 		}
 		if node.Kind == "package" {
-			packagePaths[node.File] = true
+			packages[node.File] = node
 		}
 	}
-	if contractNode.Package == "" || !packagePaths["api"] {
+	if contractNode.Package == "" || packages["api"].ID == "" {
 		t.Fatalf("expected contract to belong to its package: %#v", contractNode)
 	}
-	if !packagePaths["models"] || !packagePaths["."] {
-		t.Fatalf("expected package directories for packages without functions and at repository root: %#v", packagePaths)
+	if packages["models"].ID == "" || packages["."].ID == "" {
+		t.Fatalf("expected package directories for packages without functions and at repository root: %#v", packages)
+	}
+	for path, expected := range map[string]string{"api": "@api-team", "models": "@models-team", ".": "@go-team"} {
+		if actual := packages[path].Owner; actual != expected {
+			t.Fatalf("package %q owner=%q want %q", path, actual, expected)
+		}
 	}
 	if len(snapshot.Analysis.Complexity) == 0 {
 		t.Fatal("expected function complexity profiles")

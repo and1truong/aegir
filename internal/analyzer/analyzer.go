@@ -173,19 +173,20 @@ type function struct {
 }
 
 type indexer struct {
-	root        string
-	module      string
-	serviceName string
-	serviceID   string
-	fset        *token.FileSet
-	nodes       map[string]Node
-	edges       map[string]Edge
-	evidence    map[string]EvidenceRecord
-	functions   []function
-	byPackage   map[string]map[string]string
-	packages    map[string]string
-	contracts   []Contract
-	owners      []codeOwnerRule
+	root          string
+	module        string
+	serviceName   string
+	serviceID     string
+	fset          *token.FileSet
+	nodes         map[string]Node
+	edges         map[string]Edge
+	evidence      map[string]EvidenceRecord
+	functions     []function
+	byPackage     map[string]map[string]string
+	packages      map[string]string
+	packageOwners map[string]map[string]int
+	contracts     []Contract
+	owners        []codeOwnerRule
 }
 
 func stableID(kind, value string) string {
@@ -315,7 +316,7 @@ func newIndexer(root, repositoryName string) *indexer {
 	}
 	return &indexer{
 		root: root, module: readModule(root), serviceName: name, serviceID: stableID("service", name), fset: token.NewFileSet(),
-		nodes: map[string]Node{}, edges: map[string]Edge{}, evidence: map[string]EvidenceRecord{}, byPackage: map[string]map[string]string{}, packages: map[string]string{}, contracts: []Contract{}, owners: readCodeOwners(root),
+		nodes: map[string]Node{}, edges: map[string]Edge{}, evidence: map[string]EvidenceRecord{}, byPackage: map[string]map[string]string{}, packages: map[string]string{}, packageOwners: map[string]map[string]int{}, contracts: []Contract{}, owners: readCodeOwners(root),
 	}
 }
 
@@ -332,9 +333,38 @@ func (x *indexer) packageFor(dir, packageName string) string {
 	}
 	id = stableID("package", filepath.ToSlash(rel))
 	x.packages[dir] = id
-	x.nodes[id] = Node{ID: id, Kind: "package", Label: filepath.ToSlash(rel), Service: x.serviceID, File: filepath.ToSlash(path), Owner: ownerFor(x.owners, filepath.ToSlash(path)+"/package.go")}
+	x.nodes[id] = Node{ID: id, Kind: "package", Label: filepath.ToSlash(rel), Service: x.serviceID, File: filepath.ToSlash(path)}
 	x.addEdge(x.serviceID, "owns", id, "contains", filepath.ToSlash(rel))
 	return id
+}
+
+func (x *indexer) recordPackageOwner(packageID, path string) {
+	owner := ownerFor(x.owners, path)
+	if owner == "" {
+		return
+	}
+	if x.packageOwners[packageID] == nil {
+		x.packageOwners[packageID] = map[string]int{}
+	}
+	x.packageOwners[packageID][owner]++
+}
+
+func (x *indexer) finalizePackageOwners() {
+	for packageID, counts := range x.packageOwners {
+		owners := make([]string, 0, len(counts))
+		for owner := range counts {
+			owners = append(owners, owner)
+		}
+		sort.Slice(owners, func(i, j int) bool {
+			if counts[owners[i]] != counts[owners[j]] {
+				return counts[owners[i]] > counts[owners[j]]
+			}
+			return owners[i] < owners[j]
+		})
+		node := x.nodes[packageID]
+		node.Owner = owners[0]
+		x.nodes[packageID] = node
+	}
 }
 
 func (x *indexer) localPackageID(importPath string) (string, bool) {
@@ -411,6 +441,7 @@ func (x *indexer) collect() error {
 			return fmt.Errorf("parse %s: %w", rel, err)
 		}
 		pkgID := x.packageFor(filepath.Dir(path), parsed.Name.Name)
+		x.recordPackageOwner(pkgID, rel)
 		imports := map[string]string{}
 		for _, spec := range parsed.Imports {
 			importPath, _ := strconv.Unquote(spec.Path.Value)
@@ -473,8 +504,10 @@ func (x *indexer) collect() error {
 		node := x.nodes[contract.Node]
 		node.Package = packageID
 		x.nodes[contract.Node] = node
+		x.recordPackageOwner(packageID, contract.Path)
 		x.addEdge(packageID, "owns", contract.Node, "contains", contract.Path)
 	}
+	x.finalizePackageOwners()
 	return nil
 }
 

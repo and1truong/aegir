@@ -57,7 +57,10 @@ func codeOwnerPattern(value string) *regexp.Regexp {
 		expression.WriteString("(?:^|.*/)")
 	}
 	for index := 0; index < len(value); {
-		if strings.HasPrefix(value[index:], "**") {
+		if strings.HasPrefix(value[index:], "**/") {
+			expression.WriteString("(?:.*/)?")
+			index += 3
+		} else if strings.HasPrefix(value[index:], "**") {
 			expression.WriteString(".*")
 			index += 2
 		} else if value[index] == '*' {

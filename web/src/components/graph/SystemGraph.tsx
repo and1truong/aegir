@@ -6,10 +6,12 @@ import {
 } from '@xyflow/react';
 import { AlertTriangle, Flame } from 'lucide-react';
 import { cn } from '../../utils/cn';
-import type { SysNode, SysEdge, Severity, CoverageStatus, NodeKind } from '../../data/types';
-import { layout } from '../../lib/layout';
+import type { SysNode, SysEdge, Severity, CoverageStatus } from '../../data/types';
 import { KindIcon, CoverageIcon } from '../../product/ui';
 import type { FrontierAggregate } from '../../lib/graphProjection';
+import { positionGraph } from '../../layout/dagreLayout';
+import { clampSlot, viewportForAnchor } from '../../layout/viewport';
+import type { LayoutStrategy } from '../../layout/types';
 
 // ---------------------------------------------------------------------------
 // Decoration model shared by all graph modes
@@ -58,7 +60,9 @@ export interface SystemGraphProps {
   minimap?: boolean;
   compact?: boolean;
   className?: string;
-  fitKey?: string;
+  anchorNodeId?: string;
+  topologyRevision?: string;
+  layoutStrategy?: LayoutStrategy;
   rankdir?: 'LR' | 'TB';
   theme?: 'light' | 'dark';
 }
@@ -310,8 +314,6 @@ function nodeSize(n: SysNode, label: string, sub: string | undefined, metrics: s
   return { width, height };
 }
 
-const kindOrder: Record<NodeKind, number> = { endpoint: 0, function: 1, method: 1, transaction: 1, service: 2, package: 3, table: 4, cache: 4, topic: 5, external: 6, contract: 7, test: 8, database: 9, broker: 9 };
-
 function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[] } {
   const { nodes, edges, frontiers = [], decor = {}, selected, compact = false, onMarkerClick } = props;
   const items: { id: string; width: number; height: number }[] = [];
@@ -401,38 +403,9 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
     }
   }
 
-  const pos = layout(items, links, { rankdir: props.rankdir ?? 'LR', ranksep: compact ? 46 : 64, nodesep: compact ? 14 : 22 });
-
-  // keep group members contiguous within a column
-  if (decor.groups?.length) {
-    const groupIndex = new Map<string, string>();
-    decor.groups.forEach((g) => g.members.forEach((m) => groupIndex.set(m, (groupIndex.get(m) ?? '') + '|' + g.id)));
-    const cols = new Map<number, string[]>();
-    const sizeOf = new Map(items.map((i) => [i.id, i]));
-    for (const it of items) {
-      const p = pos.get(it.id)!;
-      const key = Math.round((p.x + it.width / 2) / 10);
-      if (!cols.has(key)) cols.set(key, []);
-      cols.get(key)!.push(it.id);
-    }
-    for (const ids of cols.values()) {
-      if (ids.length < 2) continue;
-      const slots = ids.map((id) => pos.get(id)!.y + sizeOf.get(id)!.height / 2).sort((a, b) => a - b);
-      const sorted = [...ids].sort((a, b) => {
-        const ga = groupIndex.get(a) ?? '~';
-        const gb = groupIndex.get(b) ?? '~';
-        if (ga !== gb) return ga < gb ? -1 : 1;
-        const ka = kindOrder[nodes.find((n) => n.id === a)?.kind ?? 'function'] ?? 5;
-        const kb = kindOrder[nodes.find((n) => n.id === b)?.kind ?? 'function'] ?? 5;
-        if (ka !== kb) return ka - kb;
-        return pos.get(a)!.y - pos.get(b)!.y;
-      });
-      sorted.forEach((id, i) => {
-        const p = pos.get(id)!;
-        pos.set(id, { x: p.x, y: slots[i] - sizeOf.get(id)!.height / 2 });
-      });
-    }
-  }
+  const topologyRevision = props.topologyRevision ?? `${items.map((item) => item.id).join(',')}|${links.map((link) => `${link.source}>${link.target}`).join(',')}|${props.rankdir ?? 'LR'}`;
+  const strategy = props.rankdir === 'TB' ? 'explicit-TB' : props.layoutStrategy ?? 'dependency-LR';
+  const pos = new Map(positionGraph(topologyRevision, items, links, strategy, props.anchorNodeId ?? props.selected).positions);
 
   for (const fn of flowNodes) {
     const p = pos.get(fn.id);
@@ -465,50 +438,61 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
 // Canvas
 // ---------------------------------------------------------------------------
 function Canvas(props: SystemGraphProps) {
-  const built = useMemo(() => build(props), [props.nodes, props.edges, props.frontiers, props.decor, props.selected, props.selectedEdge, props.compact, props.rankdir]); // eslint-disable-line react-hooks/exhaustive-deps
+  const built = useMemo(() => build(props), [props.nodes, props.edges, props.frontiers, props.decor, props.selected, props.selectedEdge, props.compact, props.rankdir, props.topologyRevision, props.layoutStrategy]); // eslint-disable-line react-hooks/exhaustive-deps
   const [nodes, setNodes, onNodesChange] = useNodesState<AnyNode>(built.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<SysFlowEdge>(built.edges);
-  const { fitView } = useReactFlow();
+  const { fitView, getViewport, setViewport } = useReactFlow();
   const light = props.theme === 'light';
-  const positions = useRef(new Map<string, { x: number; y: number }>());
-  const shouldFit = useRef(true);
-  const lastFitKey = useRef(props.fitKey);
+  const container = useRef<HTMLDivElement>(null);
+  const lastTopology = useRef<string | undefined>(undefined);
+  const lastAnchor = useRef<string | undefined>(undefined);
+  const anchorRatio = useRef({ x: 0.42, y: 0.5 });
+  const nodesRef = useRef(nodes);
+  const topologyRevision = props.topologyRevision ?? built.nodes.map((node) => node.id).join(',');
+  const anchorNodeId = props.anchorNodeId ?? props.selected;
 
-  const structureKey = useMemo(() => built.nodes.map((n) => n.id).join(',') + '|' + (props.fitKey ?? ''), [built.nodes, props.fitKey]);
+  useEffect(() => { nodesRef.current = nodes }, [nodes]);
 
   useEffect(() => {
-    const previous = positions.current;
-    const retained = built.nodes.filter((node) => previous.has(node.id));
-    const anchorId = props.selected && previous.has(props.selected) && built.nodes.some((node) => node.id === props.selected)
-      ? props.selected
-      : retained[0]?.id;
-    const builtAnchor = anchorId ? built.nodes.find((node) => node.id === anchorId)?.position : undefined;
-    const previousAnchor = anchorId ? previous.get(anchorId) : undefined;
-    const offset = builtAnchor && previousAnchor ? { x: previousAnchor.x - builtAnchor.x, y: previousAnchor.y - builtAnchor.y } : { x: 0, y: 0 };
-    const fitKeyChanged = lastFitKey.current !== props.fitKey;
-    const selectedWasVisible = !props.selected || previous.has(props.selected);
-    const retainedRatio = previous.size === 0 ? 1 : retained.length / previous.size;
-    shouldFit.current = previous.size === 0 || retained.length === 0 || retainedRatio < 0.5 || fitKeyChanged || !selectedWasVisible;
-    lastFitKey.current = props.fitKey;
-    setNodes(built.nodes.map((node) => ({
-      ...node,
-      position: previous.get(node.id) ?? { x: node.position.x + offset.x, y: node.position.y + offset.y },
-    })));
+    const topologyChanged = lastTopology.current !== topologyRevision;
+    if (!topologyChanged) {
+      const currentPositions = new Map(nodesRef.current.map((node) => [node.id, node.position]));
+      setNodes(built.nodes.map((node) => ({ ...node, position: currentPositions.get(node.id) ?? node.position })));
+      setEdges(built.edges);
+      return;
+    }
+    const rect = container.current?.getBoundingClientRect();
+    const viewport = getViewport();
+    const sameAnchor = Boolean(anchorNodeId && lastAnchor.current === anchorNodeId && nodesRef.current.some((node) => node.id === anchorNodeId));
+    const previousSlot = sameAnchor ? { x: viewport.x, y: viewport.y } : { x: (rect?.width ?? 1000) * 0.42, y: (rect?.height ?? 700) * 0.5 };
+    const slot = clampSlot(previousSlot, rect?.width ?? 1000, rect?.height ?? 700);
+    if (rect) anchorRatio.current = { x: slot.x / rect.width, y: slot.y / rect.height };
+    lastTopology.current = topologyRevision;
+    lastAnchor.current = anchorNodeId;
+    setNodes(built.nodes);
     setEdges(built.edges);
-  }, [built, props.fitKey, props.selected, setNodes, setEdges]);
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const timer = window.setTimeout(() => {
+      if (anchorNodeId && built.nodes.some((node) => node.id === anchorNodeId)) void setViewport(viewportForAnchor({ x: 0, y: 0 }, slot, viewport.zoom), { duration: reducedMotion ? 0 : 200 });
+      else void fitView({ padding: 0.18, duration: reducedMotion ? 0 : 200, maxZoom: 1.15 });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [built, topologyRevision, anchorNodeId, getViewport, setViewport, fitView, setNodes, setEdges]);
 
   useEffect(() => {
-    positions.current = new Map(nodes.map((node) => [node.id, node.position]));
-  }, [nodes]);
-
-  useEffect(() => {
-    if (!shouldFit.current) return;
-    const t = setTimeout(() => fitView({ padding: 0.18, duration: 300, maxZoom: 1.15 }), 60);
-    return () => clearTimeout(t);
-  }, [structureKey, fitView]);
+    const element = container.current;
+    if (!element || !anchorNodeId) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const viewport = getViewport();
+      const slot = { x: entry.contentRect.width * anchorRatio.current.x, y: entry.contentRect.height * anchorRatio.current.y };
+      void setViewport(viewportForAnchor({ x: 0, y: 0 }, slot, viewport.zoom));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [anchorNodeId, getViewport, setViewport]);
 
   return (
-    <ReactFlow<AnyNode, SysFlowEdge>
+    <div ref={container} className="h-full w-full"><ReactFlow<AnyNode, SysFlowEdge>
       nodes={nodes}
       edges={edges}
       onNodesChange={onNodesChange}
@@ -518,6 +502,10 @@ function Canvas(props: SystemGraphProps) {
       onNodeClick={(_, n) => (n.type === 'sys' || n.type === 'frontier') && props.onSelect?.(n.id)}
       onNodeDoubleClick={(_, n) => (n.type === 'sys' || n.type === 'frontier') && props.onDoubleClick?.(n.id)}
       onEdgeClick={(_, edge) => props.onEdgeSelect?.(edge.id)}
+      onMoveEnd={(_, viewport) => {
+        const rect = container.current?.getBoundingClientRect();
+        if (rect && anchorNodeId) anchorRatio.current = { x: viewport.x / rect.width, y: viewport.y / rect.height };
+      }}
       fitView
       minZoom={0.15}
       maxZoom={2}
@@ -531,7 +519,7 @@ function Canvas(props: SystemGraphProps) {
       <Background variant={BackgroundVariant.Dots} gap={18} size={1} color={light ? '#dbe1ea' : '#27272a'} />
       <Controls showInteractive={false} position="bottom-right" />
       {props.minimap && <MiniMap pannable zoomable position="bottom-left" nodeColor={(n) => (n.type === 'boundary' ? 'transparent' : n.type === 'outcome' ? (light ? '#e2e8f0' : '#27272a') : light ? '#94a3b8' : '#52525b')} nodeStrokeColor={(n) => (n.type === 'boundary' ? (light ? '#e2e8f0' : '#27272a') : 'transparent')} nodeStrokeWidth={2} maskColor={light ? 'rgba(241,245,249,0.7)' : 'rgba(9,9,11,0.7)'} style={{ width: 140, height: 90 }} />}
-    </ReactFlow>
+    </ReactFlow></div>
   );
 }
 

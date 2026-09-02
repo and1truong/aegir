@@ -48,7 +48,7 @@ interface LocalReview {
   createdAt: string;
   baseSnapshotId: number;
   headSnapshotId: number;
-  summary: { addedNodes: number; removedNodes: number; modifiedNodes: number; addedEdges: number; removedEdges: number; newViolations: number; resolvedViolations: number };
+  summary: { addedNodes: number; removedNodes: number; modifiedNodes: number; addedEdges: number; removedEdges: number; modifiedEdges?: number; newViolations: number; resolvedViolations: number };
   nodes: SysNode[];
   edges: SysEdge[];
   evidence?: EvidenceRecord[];
@@ -607,7 +607,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
             <ReviewForm compact baseRef={baseRef} headRef={headRef} setBaseRef={setBaseRef} setHeadRef={setHeadRef} run={run} loading={loading} />
           </div>
         </div>
-        <div className="mt-3 flex gap-5 font-mono text-[10px] text-zinc-400"><span className="text-emerald-300">+{review.summary.addedNodes} nodes</span><span className="text-red-300">−{review.summary.removedNodes} nodes</span><span>{review.summary.modifiedNodes} modified</span><span>{review.summary.addedEdges} added edges</span><span>{review.summary.newViolations} new violations</span><span>{review.contractDiff.changes.length} contract changes</span><span>{graph.nodes.length} visible</span></div>
+        <div className="mt-3 flex gap-5 font-mono text-[10px] text-zinc-400"><span className="text-emerald-300">+{review.summary.addedNodes} nodes</span><span className="text-red-300">−{review.summary.removedNodes} nodes</span><span>{review.summary.modifiedNodes} modified</span><span>{review.summary.addedEdges} added edges</span><span>{review.summary.modifiedEdges ?? 0} modified edges</span><span>{review.summary.newViolations} new violations</span><span>{review.contractDiff.changes.length} contract changes</span><span>{graph.nodes.length} visible</span></div>
         {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
       </header>}
       {!focusMode && <InvestigationBreadcrumbs nodes={review.nodes} />}

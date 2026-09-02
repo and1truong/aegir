@@ -30,6 +30,9 @@ func TestCompareMarksEvidenceOnlyEdgeChanges(t *testing.T) {
 	if len(result.Edges) != 1 || result.Edges[0].Change != "modified" {
 		t.Fatalf("expected modified edge for evidence delta, got %#v", result.Edges)
 	}
+	if result.Summary.ModifiedEdges != 1 {
+		t.Fatalf("expected modified edge in summary, got %#v", result.Summary)
+	}
 	if len(result.Evidence) != 2 {
 		t.Fatalf("expected review evidence records, got %#v", result.Evidence)
 	}

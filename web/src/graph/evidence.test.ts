@@ -16,6 +16,17 @@ test('returns every observation for a collapsed canonical edge', () => {
   assert.equal(formatEvidenceLocation(found[0]), 'a.go:10');
 });
 
+test('excludes subject evidence not declared by the current edge body', () => {
+  const nodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A' }, { id: 'b', kind: 'function', label: 'B' }];
+  const edge: SysEdge = { id: 'call', source: 'a', target: 'b', kind: 'calls', evidenceRefs: ['current'] };
+  const records: EvidenceRecord[] = [
+    { id: 'historical', source: 'CODE', strength: 'proven', subject: { kind: 'edge', id: 'call' }, summary: 'removed call site' },
+    { id: 'current', source: 'CODE', strength: 'proven', subject: { kind: 'edge', id: 'call' }, summary: 'current call site' },
+  ];
+  const found = evidenceForEdge(createGraphIndex(nodes, [edge], records), edge);
+  assert.deepEqual(found.map((record) => record.id), ['current']);
+});
+
 test('provides explicit legacy evidence instead of an empty explanation', () => {
   const nodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A' }, { id: 'b', kind: 'function', label: 'B' }];
   const edge: SysEdge = { id: 'call', source: 'a', target: 'b', kind: 'calls' };

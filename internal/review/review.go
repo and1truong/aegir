@@ -20,6 +20,7 @@ type Summary struct {
 	ModifiedNodes      int `json:"modifiedNodes"`
 	AddedEdges         int `json:"addedEdges"`
 	RemovedEdges       int `json:"removedEdges"`
+	ModifiedEdges      int `json:"modifiedEdges"`
 	NewViolations      int `json:"newViolations"`
 	ResolvedViolations int `json:"resolvedViolations"`
 }
@@ -120,6 +121,7 @@ func Compare(repositoryID, baseRef, headRef string, baseID, headID int64, base, 
 			headEdges[id] = edge
 			changed[edge.Source] = true
 			changed[edge.Target] = true
+			result.Summary.ModifiedEdges++
 			beforeCopy, afterCopy := before, edge
 			result.Delta.Edges = append(result.Delta.Edges, EdgeDelta{ID: id, Status: "modified", Before: &beforeCopy, After: &afterCopy, ChangeReasons: edgeChangeReasons(before, edge)})
 		}

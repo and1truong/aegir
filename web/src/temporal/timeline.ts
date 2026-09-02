@@ -71,7 +71,7 @@ export function evidenceValidity(record: EvidenceRecord, snapshot: SnapshotRef, 
 export function dependencyIntroduction(edgeId: string, timeline: Timeline) {
   const snapshotById = new Map(timeline.snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]));
   return [...timeline.reviews]
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.headSnapshotId - right.headSnapshotId || left.id.localeCompare(right.id))
     .flatMap((review) => review.delta.edges.filter((edge) => edge.id === edgeId && edge.status === 'added').map(() => ({ review, snapshot: snapshotById.get(review.headSnapshotId) })))
     .find((item) => item.snapshot);
 }
@@ -82,4 +82,3 @@ export function profileSnapshotStorage(snapshots: readonly SnapshotRef[]) {
   const recommendation = snapshots.length <= 20 && averageBytes <= 25 * 1024 * 1024 ? 'full-snapshots' : 'checkpoint-deltas';
   return { count: snapshots.length, totalBytes, averageBytes, recommendation } as const;
 }
-

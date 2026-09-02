@@ -57,3 +57,19 @@ test('answers dependency introduction deterministically and profiles retention',
   assert.deepEqual(profileSnapshotStorage(timeline.snapshots), { count: 2, totalBytes: 220, averageBytes: 110, recommendation: 'full-snapshots' });
   assert.equal(profileSnapshotStorage(Array.from({ length: 21 }, (_, index) => ({ ...timeline.snapshots[0], snapshotId: index }))).recommendation, 'checkpoint-deltas');
 });
+
+test('uses snapshot persistence order for reviews created in the same second', () => {
+  const sameSecond: Timeline = {
+    ...timeline,
+    snapshots: [
+      ...timeline.snapshots,
+      { ...timeline.snapshots[0], snapshotId: 3 },
+      { ...timeline.snapshots[1], snapshotId: 4, commit: 'later-head' },
+    ],
+    reviews: [
+      { ...timeline.reviews[0], id: 'a-later', baseSnapshotId: 3, headSnapshotId: 4 },
+      { ...timeline.reviews[0], id: 'z-earlier', baseSnapshotId: 1, headSnapshotId: 2 },
+    ],
+  };
+  assert.equal(dependencyIntroduction('bc', sameSecond)?.review.id, 'z-earlier');
+});

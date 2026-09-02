@@ -18,3 +18,19 @@ func TestCompareMarksGraphAndRuleChanges(t *testing.T) {
 		t.Fatalf("unexpected review: %#v", review.Summary)
 	}
 }
+
+func TestCompareMarksEvidenceOnlyEdgeChanges(t *testing.T) {
+	nodes := []analyzer.Node{{ID: "a", Kind: "function", Label: "A"}, {ID: "b", Kind: "function", Label: "B"}}
+	baseEdge := analyzer.Edge{ID: "a|calls|b", Source: "a", Target: "b", Kind: "calls", EvidenceRefs: []string{"old"}}
+	headEdge := baseEdge
+	headEdge.EvidenceRefs = []string{"old", "new"}
+	base := analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{baseEdge}, Evidence: []analyzer.EvidenceRecord{{ID: "old", Subject: analyzer.EvidenceSubject{Kind: "edge", ID: baseEdge.ID}}}}
+	head := analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{headEdge}, Evidence: []analyzer.EvidenceRecord{{ID: "old", Subject: analyzer.EvidenceSubject{Kind: "edge", ID: baseEdge.ID}}, {ID: "new", Subject: analyzer.EvidenceSubject{Kind: "edge", ID: baseEdge.ID}}}}
+	result := Compare("repo", "base", "head", 1, 2, base, head)
+	if len(result.Edges) != 1 || result.Edges[0].Change != "modified" {
+		t.Fatalf("expected modified edge for evidence delta, got %#v", result.Edges)
+	}
+	if len(result.Evidence) != 2 {
+		t.Fatalf("expected review evidence records, got %#v", result.Evidence)
+	}
+}

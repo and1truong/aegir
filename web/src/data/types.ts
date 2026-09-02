@@ -71,6 +71,25 @@ export interface SysEdge {
   tx?: string;
   pr?: PRChange;
   sync?: boolean;
+  evidenceRefs?: string[];
+}
+
+export type EvidenceSource = 'CODE' | 'STATIC' | 'RUNTIME' | 'SCHEMA' | 'TEST' | 'GIT' | 'INCIDENT' | 'LINT' | 'INFERRED';
+export type EvidenceStrength = 'proven' | 'observed' | 'inferred';
+
+export interface EvidenceRecord {
+  id: string;
+  source: EvidenceSource;
+  strength: EvidenceStrength;
+  subject: { kind: 'node' | 'edge' | 'finding' | 'contract'; id: string };
+  summary: string;
+  location?: { file: string; line?: number; endLine?: number; symbol?: string };
+  snapshotId?: number;
+  commit?: string;
+  reviewId?: string;
+  observedAt?: string;
+  validUntil?: string;
+  metrics?: Record<string, number | string>;
 }
 
 export interface Team {

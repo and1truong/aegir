@@ -17,6 +17,7 @@ test('returns typed reasons for every visible real entity', () => {
   assert.equal(next?.reason.kind, 'traversal');
   assert.equal(next?.reason.kind === 'traversal' ? next.reason.semanticDepth : undefined, 1);
   assert.ok(graph.edges.every((item) => item.reason.detail.length > 0));
+  assert.ok(graph.edges.every((item) => item.kind !== 'real' || item.evidenceIds.length > 0));
 });
 
 test('represents overflow as frontier variants, not canonical-looking nodes or edges', () => {

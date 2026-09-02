@@ -29,13 +29,14 @@ type Repository struct {
 }
 
 type Snapshot struct {
-	ID         int64             `json:"id"`
-	CreatedAt  string            `json:"createdAt"`
-	Repository Repository        `json:"repository"`
-	Nodes      []analyzer.Node   `json:"nodes"`
-	Edges      []analyzer.Edge   `json:"edges"`
-	Analysis   analyzer.Analysis `json:"analysis"`
-	Stats      map[string]int    `json:"stats"`
+	ID         int64                     `json:"id"`
+	CreatedAt  string                    `json:"createdAt"`
+	Repository Repository                `json:"repository"`
+	Nodes      []analyzer.Node           `json:"nodes"`
+	Edges      []analyzer.Edge           `json:"edges"`
+	Evidence   []analyzer.EvidenceRecord `json:"evidence"`
+	Analysis   analyzer.Analysis         `json:"analysis"`
+	Stats      map[string]int            `json:"stats"`
 }
 
 type Store struct{ db *sql.DB }
@@ -97,6 +98,16 @@ CREATE TABLE IF NOT EXISTS edges (
   body_json TEXT NOT NULL,
   PRIMARY KEY(snapshot_id, edge_id)
 );
+CREATE TABLE IF NOT EXISTS evidence (
+  snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+  evidence_id TEXT NOT NULL,
+  subject_kind TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  strength TEXT NOT NULL,
+  body_json TEXT NOT NULL,
+  PRIMARY KEY(snapshot_id, evidence_id)
+);
 CREATE TABLE IF NOT EXISTS analyses (
   snapshot_id INTEGER PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
   body_json TEXT NOT NULL
@@ -113,6 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_repository ON snapshots(repository_id, 
 CREATE INDEX IF NOT EXISTS idx_nodes_snapshot_kind ON nodes(snapshot_id, kind);
 CREATE INDEX IF NOT EXISTS idx_edges_snapshot_source ON edges(snapshot_id, source);
 CREATE INDEX IF NOT EXISTS idx_edges_snapshot_target ON edges(snapshot_id, target);
+CREATE INDEX IF NOT EXISTS idx_evidence_snapshot_subject ON evidence(snapshot_id, subject_kind, subject_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_repository ON reviews(repository_id, created_at DESC);
 `)
 	return err
@@ -222,6 +234,12 @@ func (s *Store) saveSnapshot(ctx context.Context, repositoryID string, indexed a
 	for _, edge := range indexed.Edges {
 		body, _ := json.Marshal(edge)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO edges(snapshot_id,edge_id,source,target,kind,body_json) VALUES(?,?,?,?,?,?)`, snapshotID, edge.ID, edge.Source, edge.Target, edge.Kind, string(body)); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	for _, evidence := range indexed.Evidence {
+		body, _ := json.Marshal(evidence)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO evidence(snapshot_id,evidence_id,subject_kind,subject_id,source,strength,body_json) VALUES(?,?,?,?,?,?,?)`, snapshotID, evidence.ID, evidence.Subject.Kind, evidence.Subject.ID, evidence.Source, evidence.Strength, string(body)); err != nil {
 			return Snapshot{}, err
 		}
 	}
@@ -343,6 +361,26 @@ func (s *Store) SnapshotByID(ctx context.Context, repositoryID string, id int64)
 		snapshot.Edges = append(snapshot.Edges, edge)
 	}
 	if err := edgeRows.Close(); err != nil {
+		return Snapshot{}, err
+	}
+	evidenceRows, err := s.db.QueryContext(ctx, `SELECT body_json FROM evidence WHERE snapshot_id=? ORDER BY evidence_id`, snapshot.ID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	for evidenceRows.Next() {
+		var body string
+		var evidence analyzer.EvidenceRecord
+		if err := evidenceRows.Scan(&body); err != nil {
+			evidenceRows.Close()
+			return Snapshot{}, err
+		}
+		if err := json.Unmarshal([]byte(body), &evidence); err != nil {
+			evidenceRows.Close()
+			return Snapshot{}, err
+		}
+		snapshot.Evidence = append(snapshot.Evidence, evidence)
+	}
+	if err := evidenceRows.Close(); err != nil {
 		return Snapshot{}, err
 	}
 	var analysisJSON string

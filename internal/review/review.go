@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/and1truong/aegir/internal/analyzer"
@@ -21,26 +22,27 @@ type Summary struct {
 }
 
 type Review struct {
-	ID                 string               `json:"id"`
-	RepositoryID       string               `json:"repositoryId"`
-	BaseRef            string               `json:"baseRef"`
-	HeadRef            string               `json:"headRef"`
-	BaseSnapshotID     int64                `json:"baseSnapshotId"`
-	HeadSnapshotID     int64                `json:"headSnapshotId"`
-	CreatedAt          string               `json:"createdAt"`
-	Summary            Summary              `json:"summary"`
-	Nodes              []analyzer.Node      `json:"nodes"`
-	Edges              []analyzer.Edge      `json:"edges"`
-	NewViolations      []analyzer.Violation `json:"newViolations"`
-	ResolvedViolations []analyzer.Violation `json:"resolvedViolations"`
-	ContractDiff       contractdiff.Diff    `json:"contractDiff"`
+	ID                 string                    `json:"id"`
+	RepositoryID       string                    `json:"repositoryId"`
+	BaseRef            string                    `json:"baseRef"`
+	HeadRef            string                    `json:"headRef"`
+	BaseSnapshotID     int64                     `json:"baseSnapshotId"`
+	HeadSnapshotID     int64                     `json:"headSnapshotId"`
+	CreatedAt          string                    `json:"createdAt"`
+	Summary            Summary                   `json:"summary"`
+	Nodes              []analyzer.Node           `json:"nodes"`
+	Edges              []analyzer.Edge           `json:"edges"`
+	Evidence           []analyzer.EvidenceRecord `json:"evidence"`
+	NewViolations      []analyzer.Violation      `json:"newViolations"`
+	ResolvedViolations []analyzer.Violation      `json:"resolvedViolations"`
+	ContractDiff       contractdiff.Diff         `json:"contractDiff"`
 }
 
 func Compare(repositoryID, baseRef, headRef string, baseID, headID int64, base, head analyzer.Snapshot) Review {
 	baseNodes, headNodes := nodeMap(base.Nodes), nodeMap(head.Nodes)
 	baseEdges, headEdges := edgeMap(base.Edges), edgeMap(head.Edges)
 	changed := map[string]bool{}
-	result := Review{RepositoryID: repositoryID, BaseRef: baseRef, HeadRef: headRef, BaseSnapshotID: baseID, HeadSnapshotID: headID, CreatedAt: time.Now().UTC().Format(time.RFC3339), Nodes: []analyzer.Node{}, Edges: []analyzer.Edge{}, NewViolations: []analyzer.Violation{}, ResolvedViolations: []analyzer.Violation{}}
+	result := Review{RepositoryID: repositoryID, BaseRef: baseRef, HeadRef: headRef, BaseSnapshotID: baseID, HeadSnapshotID: headID, CreatedAt: time.Now().UTC().Format(time.RFC3339), Nodes: []analyzer.Node{}, Edges: []analyzer.Edge{}, Evidence: []analyzer.EvidenceRecord{}, NewViolations: []analyzer.Violation{}, ResolvedViolations: []analyzer.Violation{}}
 	for id, node := range headNodes {
 		before, exists := baseNodes[id]
 		if !exists {
@@ -64,12 +66,18 @@ func Compare(repositoryID, baseRef, headRef string, baseID, headID int64, base, 
 		}
 	}
 	for id, edge := range headEdges {
-		if _, exists := baseEdges[id]; !exists {
+		before, exists := baseEdges[id]
+		if !exists {
 			edge.Change = "added"
 			headEdges[id] = edge
 			changed[edge.Source] = true
 			changed[edge.Target] = true
 			result.Summary.AddedEdges++
+		} else if strings.Join(before.EvidenceRefs, "\x00") != strings.Join(edge.EvidenceRefs, "\x00") {
+			edge.Change = "modified"
+			headEdges[id] = edge
+			changed[edge.Source] = true
+			changed[edge.Target] = true
 		}
 	}
 	for id, edge := range baseEdges {
@@ -110,6 +118,21 @@ func Compare(repositoryID, baseRef, headRef string, baseID, headID int64, base, 
 			result.Edges = append(result.Edges, edge)
 		}
 	}
+	evidenceByID := map[string]analyzer.EvidenceRecord{}
+	for _, records := range [][]analyzer.EvidenceRecord{base.Evidence, head.Evidence} {
+		for _, record := range records {
+			evidenceByID[record.ID] = record
+		}
+	}
+	usedEvidence := map[string]bool{}
+	for _, edge := range result.Edges {
+		for _, evidenceID := range edge.EvidenceRefs {
+			if record, ok := evidenceByID[evidenceID]; ok && !usedEvidence[evidenceID] {
+				result.Evidence = append(result.Evidence, record)
+				usedEvidence[evidenceID] = true
+			}
+		}
+	}
 	baseViolations := violationMap(base.Analysis.Violations)
 	headViolations := violationMap(head.Analysis.Violations)
 	for id, violation := range headViolations {
@@ -129,6 +152,7 @@ func Compare(repositoryID, baseRef, headRef string, baseID, headID int64, base, 
 	result.ContractDiff = contractdiff.Compare(baseID, headID, base.Analysis.Contracts, head.Analysis.Contracts)
 	sort.Slice(result.Nodes, func(i, j int) bool { return result.Nodes[i].ID < result.Nodes[j].ID })
 	sort.Slice(result.Edges, func(i, j int) bool { return result.Edges[i].ID < result.Edges[j].ID })
+	sort.Slice(result.Evidence, func(i, j int) bool { return result.Evidence[i].ID < result.Evidence[j].ID })
 	sum := sha256.Sum256([]byte(repositoryID + "\x00" + snapshotFingerprint(base) + "\x00" + snapshotFingerprint(head)))
 	result.ID = hex.EncodeToString(sum[:12])
 	return result
@@ -148,6 +172,8 @@ func snapshotFingerprint(snapshot analyzer.Snapshot) string {
 	}
 	for _, edge := range edges {
 		hash.Write([]byte(edge.ID))
+		hash.Write([]byte{0})
+		hash.Write([]byte(edge.Kind + "\x00" + edge.Label + "\x00" + strings.Join(edge.EvidenceRefs, "\x00")))
 		hash.Write([]byte{0})
 	}
 	return hex.EncodeToString(hash.Sum(nil))

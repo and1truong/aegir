@@ -50,7 +50,9 @@ export interface SystemGraphProps {
   frontiers?: FrontierAggregate[];
   decor?: GraphDecor;
   selected?: string;
+  selectedEdge?: string;
   onSelect?: (id: string) => void;
+  onEdgeSelect?: (id: string) => void;
   onDoubleClick?: (id: string) => void;
   onMarkerClick?: (violationId: string) => void;
   minimap?: boolean;
@@ -82,7 +84,7 @@ type SysData = {
 type OutcomeData = { label: string; status: CoverageStatus; dimmed?: boolean };
 type BoundaryData = { label: string; kind: GraphGroup['kind'] };
 type FrontierData = { label: string; direction: FrontierAggregate['direction']; hiddenCount: number; selected?: boolean };
-type SysEdgeData = { tone: EdgeTone; width: number; dashed?: boolean; dotted?: boolean; label?: string; dimmed?: boolean; highlighted?: boolean; kind: string };
+type SysEdgeData = { tone: EdgeTone; width: number; dashed?: boolean; dotted?: boolean; label?: string; dimmed?: boolean; highlighted?: boolean; selected?: boolean; kind: string };
 
 type SysFlowNode = Node<SysData, 'sys'>;
 type OutcomeFlowNode = Node<OutcomeData, 'outcome'>;
@@ -270,11 +272,12 @@ function SysEdgeView({ id, sourceX, sourceY, targetX, targetY, sourcePosition, t
   const color = d.highlighted ? edgeColor.highlight : edgeColor[d.tone];
   return (
     <>
+      <BaseEdge id={`${id}:hit`} path={path} style={{ stroke: 'transparent', strokeWidth: 14, pointerEvents: 'stroke', cursor: 'pointer' }} />
       <BaseEdge
         id={id}
         path={path}
         markerEnd={markerEnd}
-        style={{ stroke: color, strokeWidth: d.highlighted ? Math.max(d.width, 2.2) : d.width, strokeDasharray: d.dashed ? '6 4' : d.dotted ? '2 4' : undefined, opacity: d.dimmed ? 0.15 : 0.95 }}
+        style={{ stroke: d.selected ? edgeColor.highlight : color, strokeWidth: d.selected ? Math.max(d.width, 3) : d.highlighted ? Math.max(d.width, 2.2) : d.width, strokeDasharray: d.dashed ? '6 4' : d.dotted ? '2 4' : undefined, opacity: d.dimmed ? 0.15 : 0.95 }}
       />
       {d.label && (
         <EdgeLabelRenderer>
@@ -348,8 +351,11 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
       source: s,
       target: t,
       type: 'sys',
+      interactionWidth: 20,
+      focusable: true,
+      ariaLabel: `${e.kind} edge from ${s} to ${t}`,
       markerEnd: { type: MarkerType.ArrowClosed, color, width: 12, height: 12 },
-      data: { tone: tone in edgeColor ? tone : 'default', width, dashed, dotted, label: decor.edgeLabel?.[e.id], dimmed: decor.edgeDimmed?.has(e.id), highlighted, kind: e.kind },
+      data: { tone: tone in edgeColor ? tone : 'default', width, dashed, dotted, label: decor.edgeLabel?.[e.id], dimmed: decor.edgeDimmed?.has(e.id), highlighted, selected: props.selectedEdge === e.id, kind: e.kind },
     };
   });
 
@@ -366,6 +372,9 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
       source,
       target,
       type: 'sys',
+      interactionWidth: 20,
+      focusable: true,
+      ariaLabel: `${frontier.direction} frontier with ${frontier.hiddenCount} hidden nodes`,
       markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor.transitive, width: 12, height: 12 },
       data: { tone: 'transitive', width: 1.2, dashed: true, label: 'expand', kind: 'frontier-link' },
     });
@@ -456,7 +465,7 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
 // Canvas
 // ---------------------------------------------------------------------------
 function Canvas(props: SystemGraphProps) {
-  const built = useMemo(() => build(props), [props.nodes, props.edges, props.decor, props.selected, props.compact, props.rankdir]); // eslint-disable-line react-hooks/exhaustive-deps
+  const built = useMemo(() => build(props), [props.nodes, props.edges, props.frontiers, props.decor, props.selected, props.selectedEdge, props.compact, props.rankdir]); // eslint-disable-line react-hooks/exhaustive-deps
   const [nodes, setNodes, onNodesChange] = useNodesState<AnyNode>(built.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<SysFlowEdge>(built.edges);
   const { fitView } = useReactFlow();
@@ -506,8 +515,9 @@ function Canvas(props: SystemGraphProps) {
       onEdgesChange={onEdgesChange}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
-      onNodeClick={(_, n) => n.type === 'sys' && props.onSelect?.(n.id)}
-      onNodeDoubleClick={(_, n) => n.type === 'sys' && props.onDoubleClick?.(n.id)}
+      onNodeClick={(_, n) => (n.type === 'sys' || n.type === 'frontier') && props.onSelect?.(n.id)}
+      onNodeDoubleClick={(_, n) => (n.type === 'sys' || n.type === 'frontier') && props.onDoubleClick?.(n.id)}
+      onEdgeClick={(_, edge) => props.onEdgeSelect?.(edge.id)}
       fitView
       minZoom={0.15}
       maxZoom={2}

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import type { Contract, NodeCoverage, Rule, SysEdge, SysNode, Violation } from '../data/types';
+import type { Contract, EvidenceRecord, NodeCoverage, Rule, SysEdge, SysNode, Violation } from '../data/types';
 
 export interface Repository {
   id: string;
@@ -18,6 +18,7 @@ export interface ProductSnapshot {
   repository: Repository;
   nodes: SysNode[];
   edges: SysEdge[];
+  evidence: EvidenceRecord[];
   analysis: {
     rules: Rule[];
     violations: Violation[];

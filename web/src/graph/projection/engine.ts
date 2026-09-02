@@ -73,7 +73,7 @@ function overview(index: GraphIndex, definition: ProjectionDefinition, edgeKinds
   const nodes: VisibleNode[] = selected.map((node) => ({ kind: 'real', id: node.id, node, reason, score: explanation(reason) }));
   const edges: VisibleEdge[] = index.edges
     .filter((edge) => edgeKinds.has(edge.kind) && ids.has(edge.source) && ids.has(edge.target))
-    .map((edge) => ({ kind: 'real', id: edge.id, edge, ...visualEndpoints(edge, definition), canonicalEdgeIds: [edge.id], reason, evidenceIds: [] }));
+    .map((edge) => ({ kind: 'real', id: edge.id, edge, ...visualEndpoints(edge, definition), canonicalEdgeIds: [edge.id], reason, evidenceIds: [...(index.evidenceBySubject.get(`edge:${edge.id}`) ?? [])] }));
   return {
     revision: `${definition.id}:overview:${selected.map((node) => node.id).join(',')}`,
     projectionId: definition.id,
@@ -187,7 +187,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
     const connectsRoots = rootSet.has(endpoints.source) && rootSet.has(endpoints.target);
     if (!visible.has(endpoints.source) || !visible.has(endpoints.target) || (!traversalEdgeIds.has(edge.id) && !connectsRoots)) return [];
     const reason = reasons.get(endpoints.target) ?? reasons.get(endpoints.source) ?? { kind: 'root' as const, detail: 'Connects required roots.' };
-    return [{ kind: 'real' as const, id: edge.id, edge, ...endpoints, canonicalEdgeIds: [edge.id], reason, evidenceIds: [] }];
+    return [{ kind: 'real' as const, id: edge.id, edge, ...endpoints, canonicalEdgeIds: [edge.id], reason, evidenceIds: [...(index.evidenceBySubject.get(`edge:${edge.id}`) ?? [])] }];
   });
   const frontierEdges: VisibleEdge[] = visibleFrontiers.map((frontier) => ({ kind: 'frontier-link', id: `frontier-link:${frontier.id}`, source: frontier.direction === 'downstream' ? frontier.parentId : frontier.id, target: frontier.direction === 'downstream' ? frontier.id : frontier.parentId, canonicalEdgeIds: [], reason: { kind: 'frontier', detail: `Connects the ${frontier.category} frontier to its parent.` }, evidenceIds: [] }));
   const pruned = Math.max(0, candidateIds.size - realNodes.length);

@@ -1,4 +1,4 @@
-import type { EdgeKind, SysEdge, SysNode } from '../data/types';
+import type { EdgeKind, EvidenceRecord, SysEdge, SysNode } from '../data/types';
 
 export type ProjectionDirection = 'upstream' | 'downstream';
 export type ProjectionDepth = 0 | 1 | 2 | 3 | 'all';
@@ -12,6 +12,8 @@ export interface GraphIndex {
   outgoingByNode: ReadonlyMap<string, readonly string[]>;
   adjacentByNode: ReadonlyMap<string, readonly string[]>;
   membership: ReadonlyMap<string, { service?: string; pkg?: string; owner?: string }>;
+  evidenceById: ReadonlyMap<string, EvidenceRecord>;
+  evidenceBySubject: ReadonlyMap<string, readonly string[]>;
 }
 
 export interface RelationshipPolicy {

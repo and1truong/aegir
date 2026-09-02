@@ -1,4 +1,4 @@
-import type { SysEdge, SysNode } from '../data/types';
+import type { EvidenceRecord, SysEdge, SysNode } from '../data/types';
 import type { GraphIndex } from './types';
 
 function append(map: Map<string, string[]>, id: string, edgeId: string) {
@@ -7,12 +7,16 @@ function append(map: Map<string, string[]>, id: string, edgeId: string) {
   map.set(id, values);
 }
 
-export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysEdge[]): GraphIndex {
+export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysEdge[], evidence: readonly EvidenceRecord[] = []): GraphIndex {
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const edgeById = new Map<string, SysEdge>();
   const incomingByNode = new Map<string, string[]>();
   const outgoingByNode = new Map<string, string[]>();
   const adjacentByNode = new Map<string, string[]>();
+  const evidenceById = new Map(evidence.map((record) => [record.id, record]));
+  const evidenceBySubject = new Map<string, string[]>();
+
+  for (const record of evidence) append(evidenceBySubject, `${record.subject.kind}:${record.subject.id}`, record.id);
 
   for (const edge of edges) {
     if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) continue;
@@ -21,6 +25,12 @@ export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysE
     append(incomingByNode, edge.target, edge.id);
     append(adjacentByNode, edge.source, edge.id);
     if (edge.target !== edge.source) append(adjacentByNode, edge.target, edge.id);
+    if ((evidenceBySubject.get(`edge:${edge.id}`)?.length ?? 0) === 0) {
+      const id = `legacy:${edge.id}`;
+      const fallback: EvidenceRecord = { id, source: 'INFERRED', strength: 'inferred', subject: { kind: 'edge', id: edge.id }, summary: edge.label ? `Legacy relationship: ${edge.label}` : 'Legacy relationship; re-index for exact source evidence.' };
+      evidenceById.set(id, fallback);
+      append(evidenceBySubject, `edge:${edge.id}`, id);
+    }
   }
 
   const sort = (map: Map<string, string[]>) => {
@@ -43,5 +53,7 @@ export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysE
     outgoingByNode,
     adjacentByNode,
     membership: new Map(nodes.map((node) => [node.id, { service: node.service, pkg: node.pkg, owner: node.owner }])),
+    evidenceById,
+    evidenceBySubject,
   };
 }

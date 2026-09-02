@@ -128,6 +128,14 @@ test('shared directional candidates do not consume free unique-node slots', () =
   assert.deepEqual(realIds(graph), ['root', 'b', 'c']);
 });
 
+test('collapsed groups still enqueue members visible from the opposite direction', () => {
+  const grouped = ['b', ...Array.from({ length: 8 }, (_, index) => `s${index}`)].map((id) => ({ ...node(id), service: 'shared' }));
+  const nodes = [node('root'), node('c'), ...grouped];
+  const edges = [edge('b', 'root'), edge('root', 'b'), edge('b', 'c'), ...grouped.slice(1).map((item) => edge('root', item.id))];
+  const graph = projectVisibleGraph(createGraphIndex(nodes, edges), projectionDefinition('dependencies'), { activeNodeId: 'root', upstreamDepth: 1, downstreamDepth: 2, branchLimit: 4, nodeBudget: 3 });
+  assert.deepEqual(realIds(graph), ['root', 'c', 'b']);
+});
+
 test('locked paths reserve ordered entities and expose stale segments', () => {
   const nodes = [node('root'), node('middle'), node('target'), node('noise')];
   const edges = [edge('root', 'middle'), edge('middle', 'target'), edge('root', 'noise')];

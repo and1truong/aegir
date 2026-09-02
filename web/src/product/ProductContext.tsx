@@ -37,6 +37,7 @@ interface ProductState {
   active?: Repository;
   snapshot?: ProductSnapshot;
   timeline?: Timeline;
+  repositorySyncError?: string;
   timelineSyncError?: string;
   loading: boolean;
   error?: string;
@@ -44,6 +45,7 @@ interface ProductState {
   selectSnapshot: (id: number) => Promise<void>;
   addRepository: (path: string) => Promise<void>;
   reindex: (coveragePath?: string, telemetryPath?: string) => Promise<void>;
+  refreshRepositories: () => Promise<void>;
   refreshTimeline: () => Promise<void>;
   clearError: () => void;
 }
@@ -62,6 +64,7 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
   const [activeID, setActiveID] = useState(() => window.localStorage.getItem('aegir-repository') ?? '');
   const [snapshot, setSnapshot] = useState<ProductSnapshot>();
   const [timeline, setTimeline] = useState<Timeline>();
+  const [repositorySyncError, setRepositorySyncError] = useState<string>();
   const [timelineSyncError, setTimelineSyncError] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
@@ -70,6 +73,7 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
   const refreshRepositories = useCallback(async () => {
     const result = await api<{ repositories: Repository[] }>('/api/repositories');
     setRepositories(result.repositories);
+    setRepositorySyncError(undefined);
     if (!activeID && result.repositories[0]) setActiveID(result.repositories[0].id);
   }, [activeID]);
 
@@ -105,16 +109,18 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
 
   const reindex = useCallback(async (coveragePath?: string, telemetryPath?: string) => {
     if (!active) return;
-    setLoading(true); setError(undefined);
+    setLoading(true); setError(undefined); setRepositorySyncError(undefined); setTimelineSyncError(undefined);
+    let indexed: ProductSnapshot;
     try {
-      const indexed = await api<ProductSnapshot>(`/api/repositories/${active.id}/index`, { method: 'POST', body: JSON.stringify({ coveragePath: coveragePath ?? '', telemetryPath: telemetryPath ?? '' }) });
-      setSnapshot(indexed);
-      await refreshRepositories();
-      try { await refreshTimeline() }
-      catch (cause) { setTimelineSyncError(cause instanceof Error ? cause.message : String(cause)) }
+      indexed = await api<ProductSnapshot>(`/api/repositories/${active.id}/index`, { method: 'POST', body: JSON.stringify({ coveragePath: coveragePath ?? '', telemetryPath: telemetryPath ?? '' }) });
     }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setLoading(false) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setLoading(false); return }
+    setSnapshot(indexed);
+    await Promise.all([
+      refreshRepositories().catch((cause) => setRepositorySyncError(cause instanceof Error ? cause.message : String(cause))),
+      refreshTimeline().catch((cause) => setTimelineSyncError(cause instanceof Error ? cause.message : String(cause))),
+    ]);
+    setLoading(false);
   }, [active, refreshRepositories, refreshTimeline]);
 
   const selectSnapshot = useCallback(async (id: number) => {
@@ -125,7 +131,7 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
     finally { setLoading(false) }
   }, [active, snapshot?.id]);
 
-  const value = useMemo<ProductState>(() => ({ repositories, active, snapshot, timeline, timelineSyncError, loading, error, selectRepository: setActiveID, selectSnapshot, addRepository, reindex, refreshTimeline, clearError: () => setError(undefined) }), [repositories, active, snapshot, timeline, timelineSyncError, loading, error, selectSnapshot, addRepository, reindex, refreshTimeline]);
+  const value = useMemo<ProductState>(() => ({ repositories, active, snapshot, timeline, repositorySyncError, timelineSyncError, loading, error, selectRepository: setActiveID, selectSnapshot, addRepository, reindex, refreshRepositories, refreshTimeline, clearError: () => setError(undefined) }), [repositories, active, snapshot, timeline, repositorySyncError, timelineSyncError, loading, error, selectSnapshot, addRepository, reindex, refreshRepositories, refreshTimeline]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 

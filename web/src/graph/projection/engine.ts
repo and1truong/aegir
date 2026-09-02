@@ -180,6 +180,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
         const withinDepth = ordered.filter((candidate) => candidate.nextDepth <= limit);
         const beyondDepth = ordered.filter((candidate) => candidate.nextDepth > limit);
         const eligible = [...withinDepth, ...(pages > 0 ? beyondDepth : [])];
+        const eligibleIds = new Set(eligible.map((candidate) => candidate.node.id));
         const groupLimit = branchLimit + pages * branchPageSize;
         const remaining = Math.max(0, Math.min(directionLimit, nodeBudget) - visible.size);
         let selected = withinCapacity(eligible, Math.min(groupLimit, remaining));
@@ -194,6 +195,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
           for (const group of groups) {
             const members = ordered.filter((candidate) => group.memberNodeIds.includes(candidate.node.id));
             if (!expansions[group.id]) {
+              selected.push(...members.filter((candidate) => visible.has(candidate.node.id) && eligibleIds.has(candidate.node.id)));
               frontiers.set(group.id, group);
               continue;
             }

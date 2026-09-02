@@ -243,7 +243,12 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
   useEffect(() => { setPathResult(undefined); setSelectedPathIndex(0) }, [projectedSelected, pathQueryId, investigation.evidencePolicy.maximumLevel, investigation.evidencePolicy.includeStale]);
   useEffect(() => {
     if (mode !== 'contracts' || !active || !snapshot) return;
-    fetch(`/api/repositories/${active.id}/contracts/diff?headSnapshot=${snapshot.id}`).then((response) => response.json()).then(setContractDiff);
+    let current = true;
+    fetch(`/api/repositories/${active.id}/contracts/diff?headSnapshot=${snapshot.id}`)
+      .then((response) => response.ok ? response.json() as Promise<ContractDiff> : Promise.reject(new Error('Contract diff unavailable.')))
+      .then((diff) => { if (current) setContractDiff(diff) })
+      .catch(() => { if (current) setContractDiff(undefined) });
+    return () => { current = false };
   }, [mode, active, snapshot?.id]);
 
   const violations = snapshot?.analysis.violations ?? [];
@@ -577,9 +582,9 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
     if (selectedEdgeId && !selectedEdge) dispatch({ type: 'selectEntity', entity: selected ? { kind: 'node', id: selected } : null });
   }, [selectedEdgeId, selectedEdge, selected, dispatch]);
   useEffect(() => {
-    if (!review || !selected || review.nodes.some((node) => node.id === selected)) return;
-    dispatch({ type: 'reconcileFocalNode', nodeId: reconcileMissingFocal(investigation, new Set(review.nodes.map((node) => node.id)), graph.visibleGraph.rootNodeIds[0] ?? review.nodes[0]?.id) });
-  }, [review, selected, investigation, graph.visibleGraph.rootNodeIds, dispatch]);
+    if (!review || !selected || policyGraph.nodes.some((node) => node.id === selected)) return;
+    dispatch({ type: 'reconcileFocalNode', nodeId: reconcileMissingFocal(investigation, new Set(policyGraph.nodes.map((node) => node.id)), graph.visibleGraph.rootNodeIds[0] ?? policyGraph.nodes[0]?.id) });
+  }, [review, selected, policyGraph.nodes, investigation, graph.visibleGraph.rootNodeIds, dispatch]);
   if (!review) return <div className="flex h-full items-center justify-center p-6"><div className="w-full max-w-[580px] rounded-lg border border-zinc-800 bg-zinc-900/30 p-5"><GitCompare className="h-6 w-6 text-violet-300" /><h1 className="mt-3 text-[16px] font-semibold">Review local Git changes</h1><p className="mt-1 text-[11px] text-zinc-500">Aegir archives the base ref read-only, compares it with another ref or the current working tree, and persists an evidence-backed graph review.</p><ReviewForm baseRef={baseRef} headRef={headRef} setBaseRef={setBaseRef} setHeadRef={setHeadRef} run={run} loading={loading} /><>{error && <div className="mt-3 text-[11px] text-red-300">{error}</div>}</></div></div>;
   const statusMaps = reviewSnapshotSide === 'delta' ? deltaStatusMaps(delta) : { nodes: new Map<string, import('../data/types').GraphDeltaStatus>(), edges: new Map<string, import('../data/types').GraphDeltaStatus>() };
   const decor: GraphDecor = { tone: {}, badges: {}, edgeTone: {}, edgeLabel: {}, dimmed: new Set(), edgeDimmed: new Set() };
@@ -663,7 +668,7 @@ function AbstractionShortcutController({ enabled }: { enabled: boolean }) {
 }
 
 export function ProductApp() {
-  const { repositories, active, snapshot, timelineSyncError, loading, error, selectRepository, refreshTimeline } = useProduct();
+  const { repositories, active, snapshot, repositorySyncError, timelineSyncError, loading, error, selectRepository, refreshRepositories, refreshTimeline } = useProduct();
   const [theme, setTheme] = useState<'light' | 'dark'>(() => window.localStorage.getItem('aegir-theme') === 'light' ? 'light' : 'dark');
   const [screen, setScreen] = useState<Screen>('overview');
   const [railOpen, setRailOpen] = useState(true);
@@ -691,7 +696,7 @@ export function ProductApp() {
         <div className="mt-auto border-t border-zinc-800 p-2"><button onClick={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-zinc-500 hover:bg-zinc-900">{theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}{theme === 'dark' ? 'Light' : 'Dark'} theme</button></div>
       </aside>}
       <div className="relative min-w-0 flex-1">
-        {timelineSyncError && <div className="absolute right-3 top-3 z-50 rounded-md border border-amber-900/60 bg-zinc-950/95 px-3 py-2 text-[10px] text-amber-200">Re-indexed, but timeline sync failed: {timelineSyncError} <button type="button" onClick={() => void refreshTimeline().catch(() => {})} className="ml-1 underline">Retry</button></div>}
+        {(repositorySyncError || timelineSyncError) && <div className="absolute right-3 top-3 z-50 rounded-md border border-amber-900/60 bg-zinc-950/95 px-3 py-2 text-[10px] text-amber-200">{repositorySyncError && <div>Re-indexed, but repository sync failed: {repositorySyncError} <button type="button" onClick={() => void refreshRepositories().catch(() => {})} className="ml-1 underline">Retry</button></div>}{timelineSyncError && <div>Re-indexed, but timeline sync failed: {timelineSyncError} <button type="button" onClick={() => void refreshTimeline().catch(() => {})} className="ml-1 underline">Retry</button></div>}</div>}
         {!railOpen && !focusMode && <button onClick={() => setRailOpen(true)} aria-label="Show navigation rail" title="Show navigation rail" className="absolute bottom-3 left-3 z-50 rounded-md border border-zinc-700 bg-zinc-950/90 p-2 text-zinc-400 shadow-lg hover:bg-zinc-800 hover:text-zinc-100"><PanelLeftOpen className="h-4 w-4" /></button>}
         {loading && !snapshot ? <div className="flex h-full items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-sky-300" /></div> : error ? <div className="p-5 text-red-300">{error}</div> : screen === 'overview' ? <Overview openExplorer={() => setScreen('explorer')} /> : screen === 'explorer' ? <Explorer {...graphViewProps} /> : screen === 'rules' ? <RulesScreen /> : screen === 'search' ? <SearchScreen /> : screen === 'settings' ? <SettingsScreen /> : <ReviewScreen {...graphViewProps} />}
       </div>

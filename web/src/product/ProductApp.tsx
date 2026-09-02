@@ -10,7 +10,9 @@ import { Badge, Btn, KindIcon, SeverityBadge } from './ui';
 import { cn } from '../utils/cn';
 import { useProduct } from './ProductContext';
 import { GraphScopeControls, type ExpandedBranch } from './GraphScopeControls';
-import { isAggregateNode, projectGraph, projectPRGraph, type BranchExpansions, type ProjectionDepth } from '../lib/graphProjection';
+import { isAggregateNode, projectGraph, projectPRGraph, type BranchExpansions } from '../lib/graphProjection';
+import { useInvestigation } from '../investigation/InvestigationContext';
+import { enabledRelationships as deriveEnabledRelationships, legacyBranchExpansions } from '../investigation/reducer';
 
 type Screen = 'overview' | 'explorer' | 'pulls' | 'rules' | 'search' | 'settings';
 type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint';
@@ -106,13 +108,16 @@ interface GraphViewProps {
 
 function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) {
   const { active, snapshot } = useProduct();
-  const [mode, setMode] = useState<ExplorerMode>('dependencies');
-  const [selected, setSelected] = useState<string>();
+  const { state: investigation, dispatch } = useInvestigation();
+  const mode = investigation.projectionId as ExplorerMode;
+  const selected = investigation.focalNodeId;
+  const { upstream: upstreamDepth, downstream: downstreamDepth } = investigation.depth;
+  const enabledRelationships = useMemo(
+    () => deriveEnabledRelationships(investigation, MODE_RELATIONSHIPS[mode]),
+    [investigation, mode],
+  );
+  const branchExpansions = useMemo(() => legacyBranchExpansions(investigation), [investigation]);
   const [query, setQuery] = useState('');
-  const [upstreamDepth, setUpstreamDepth] = useState<ProjectionDepth>(1);
-  const [downstreamDepth, setDownstreamDepth] = useState<ProjectionDepth>(2);
-  const [enabledRelationships, setEnabledRelationships] = useState<Set<EdgeKind>>(() => new Set(MODE_RELATIONSHIPS.dependencies));
-  const [branchExpansions, setBranchExpansions] = useState<BranchExpansions>({});
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [impact, setImpact] = useState<{ root?: string; nodes: SysNode[]; edges: SysEdge[]; hops: Record<string, number> }>();
   const [contractDiff, setContractDiff] = useState<ContractDiff>();
@@ -120,16 +125,13 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
   const edges = snapshot?.edges ?? [];
 
   useEffect(() => {
-    setSelected(undefined);
-    setBranchExpansions({});
+    dispatch({ type: 'resetContext', contextKey: `snapshot:${active?.id ?? 'none'}:${snapshot?.id ?? 'none'}`, projectionId: 'dependencies' });
     setImpact(undefined);
     setContractDiff(undefined);
-  }, [active?.id]);
-  useEffect(() => { if (selected && !nodes.some((node) => node.id === selected)) setSelected(undefined) }, [nodes, selected]);
+  }, [active?.id, snapshot?.id, dispatch]);
   useEffect(() => {
-    setEnabledRelationships(new Set(MODE_RELATIONSHIPS[mode]));
-    setBranchExpansions({});
-  }, [mode]);
+    if (selected && !nodes.some((node) => node.id === selected)) dispatch({ type: 'setFocalNode', nodeId: undefined });
+  }, [nodes, selected, dispatch]);
   useEffect(() => {
     if (mode !== 'impact' || !selected || !active) return;
     fetch(`/api/repositories/${active.id}/impact?nodeId=${encodeURIComponent(selected)}&depth=4`)
@@ -227,33 +229,33 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
   const selectGraphNode = (id: string) => {
     const aggregate = graph.aggregates.find((item) => item.nodeId === id);
     if (aggregate) {
-      setBranchExpansions((current) => ({ ...current, [aggregate.branchKey]: (current[aggregate.branchKey] ?? 0) + 1 }));
+      dispatch({ type: 'expandFrontier', frontierId: aggregate.branchKey });
       return;
     }
-    setSelected(id);
+    dispatch({ type: 'setFocalNode', nodeId: id });
   };
-  const toggleRelationship = (kind: EdgeKind) => setEnabledRelationships((current) => {
-    const next = new Set(current);
-    if (next.has(kind)) next.delete(kind); else next.add(kind);
-    return next;
+  const toggleRelationship = (kind: EdgeKind) => dispatch({
+    type: 'setRelationshipOverride',
+    kind,
+    value: enabledRelationships.has(kind) ? 'exclude' : 'include',
   });
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!focusMode && <div className="flex h-10 items-center gap-1 border-b border-zinc-800 px-3">
-        {(['dependencies', 'data flow', 'runtime', 'impact', 'coverage', 'complexity', 'contracts', 'lint'] as ExplorerMode[]).map((item) => <button key={item} onClick={() => setMode(item)} className={cn('rounded-md px-2 py-1.5 text-[11px] capitalize', mode === item ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}>{item}</button>)}
+        {(['dependencies', 'data flow', 'runtime', 'impact', 'coverage', 'complexity', 'contracts', 'lint'] as ExplorerMode[]).map((item) => <button key={item} onClick={() => dispatch({ type: 'setProjection', projectionId: item })} className={cn('rounded-md px-2 py-1.5 text-[11px] capitalize', mode === item ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}>{item}</button>)}
         <span className="ml-auto font-mono text-[10px] text-zinc-500">{graph.nodes.length} nodes · {graph.edges.length} edges</span>
         <button onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? 'Hide inspector' : 'Show inspector'} title={inspectorOpen ? 'Hide inspector' : 'Show inspector'} className="ml-1 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">{inspectorOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}</button>
         <button onClick={() => setFocusMode(true)} aria-label="Enter focus mode" title="Focus mode" className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><Maximize2 className="h-3.5 w-3.5" /></button>
       </div>}
-      {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={setUpstreamDepth} setDownstream={setDownstreamDepth} relationships={MODE_RELATIONSHIPS[mode]} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, nodes)} collapseBranch={(key) => setBranchExpansions((current) => { const next = { ...current }; delete next[key]; return next })} />}
+      {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS[mode]} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}
       <div className="flex min-h-0 flex-1">
         {!focusMode && <aside className="flex w-[250px] shrink-0 flex-col border-r border-zinc-800">
           <div className="border-b border-zinc-800 p-2"><div className="flex h-7 items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950 px-2"><Search className="h-3.5 w-3.5 text-zinc-600" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter symbols…" className="w-full bg-transparent font-mono text-[11px] outline-none" /></div></div>
-          <div className="min-h-0 flex-1 overflow-y-auto py-1">{filtered.map((node) => <button key={node.id} onClick={() => setSelected(node.id)} className={cn('flex w-full items-center gap-2 px-2 py-1 text-left', selected === node.id ? 'bg-sky-500/10 text-sky-100' : 'text-zinc-300 hover:bg-zinc-900')}><KindIcon kind={node.kind} /><span className="min-w-0 flex-1 truncate font-mono text-[10.5px]">{node.label}</span></button>)}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto py-1">{filtered.map((node) => <button key={node.id} onClick={() => dispatch({ type: 'setFocalNode', nodeId: node.id })} className={cn('flex w-full items-center gap-2 px-2 py-1 text-left', selected === node.id ? 'bg-sky-500/10 text-sky-100' : 'text-zinc-300 hover:bg-zinc-900')}><KindIcon kind={node.kind} /><span className="min-w-0 flex-1 truncate font-mono text-[10.5px]">{node.label}</span></button>)}</div>
         </aside>}
         <main className="relative min-w-0 flex-1"><SystemGraph nodes={graph.nodes} edges={graph.edges} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={`${mode}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</main>
         {!focusMode && inspectorOpen && <aside className="w-[310px] shrink-0 overflow-y-auto border-l border-zinc-800 p-3">
-          {selectedNode ? <><div className="flex items-center gap-2"><KindIcon kind={selectedNode.kind} /><Badge>{selectedNode.kind}</Badge></div><h2 className="mt-2 break-words font-mono text-[13px] text-zinc-50">{selectedNode.label}</h2><div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{selectedNode.file}</div>{mode === 'coverage' && coverage.get(selectedNode.id) && <div className="mt-4 rounded-md border border-zinc-800 p-2"><div className="font-mono text-[18px] text-zinc-100">{coverage.get(selectedNode.id)?.line ?? '—'}%</div><div className="mt-1 text-[10px] text-zinc-500">{coverage.get(selectedNode.id)?.note}</div></div>}{mode === 'complexity' && complexity.get(selectedNode.id) && <ComplexityInspector item={complexity.get(selectedNode.id)!} />}{mode === 'runtime' && telemetry.get(selectedNode.id) && <RuntimeInspector item={telemetry.get(selectedNode.id)!} />}{mode === 'contracts' ? <ContractInspector diff={contractDiff} contractID={selectedNode.id} /> : <div className="mt-4 border-t border-zinc-800 pt-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationships in scope</div>{graph.edges.filter((edge) => !isAggregateNode(edge.source) && !isAggregateNode(edge.target) && (edge.source === selected || edge.target === selected)).slice(0, 30).map((edge) => { const other = nodes.find((node) => node.id === (edge.source === selected ? edge.target : edge.source)); return <button key={edge.id} onClick={() => other && setSelected(other.id)} className="mt-1 flex w-full items-center gap-2 text-left text-[10.5px] text-zinc-300 hover:text-sky-200"><Badge>{edge.kind}</Badge><span className="truncate font-mono">{other?.label}</span></button> })}</div>}</> : <div className="text-zinc-500">Select a node.</div>}
+          {selectedNode ? <><div className="flex items-center gap-2"><KindIcon kind={selectedNode.kind} /><Badge>{selectedNode.kind}</Badge></div><h2 className="mt-2 break-words font-mono text-[13px] text-zinc-50">{selectedNode.label}</h2><div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{selectedNode.file}</div>{mode === 'coverage' && coverage.get(selectedNode.id) && <div className="mt-4 rounded-md border border-zinc-800 p-2"><div className="font-mono text-[18px] text-zinc-100">{coverage.get(selectedNode.id)?.line ?? '—'}%</div><div className="mt-1 text-[10px] text-zinc-500">{coverage.get(selectedNode.id)?.note}</div></div>}{mode === 'complexity' && complexity.get(selectedNode.id) && <ComplexityInspector item={complexity.get(selectedNode.id)!} />}{mode === 'runtime' && telemetry.get(selectedNode.id) && <RuntimeInspector item={telemetry.get(selectedNode.id)!} />}{mode === 'contracts' ? <ContractInspector diff={contractDiff} contractID={selectedNode.id} /> : <div className="mt-4 border-t border-zinc-800 pt-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationships in scope</div>{graph.edges.filter((edge) => !isAggregateNode(edge.source) && !isAggregateNode(edge.target) && (edge.source === selected || edge.target === selected)).slice(0, 30).map((edge) => { const other = nodes.find((node) => node.id === (edge.source === selected ? edge.target : edge.source)); return <button key={edge.id} onClick={() => other && dispatch({ type: 'setFocalNode', nodeId: other.id })} className="mt-1 flex w-full items-center gap-2 text-left text-[10.5px] text-zinc-300 hover:text-sky-200"><Badge>{edge.kind}</Badge><span className="truncate font-mono">{other?.label}</span></button> })}</div>}</> : <div className="text-zinc-500">Select a node.</div>}
         </aside>}
       </div>
     </div>
@@ -311,21 +313,22 @@ function SettingsScreen() {
 
 function ReviewScreen({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) {
   const { active } = useProduct();
+  const { state: investigation, dispatch } = useInvestigation();
+  const selected = investigation.focalNodeId;
+  const { upstream: upstreamDepth, downstream: downstreamDepth } = investigation.depth;
+  const enabledRelationships = useMemo(
+    () => deriveEnabledRelationships(investigation, MODE_RELATIONSHIPS.impact),
+    [investigation],
+  );
+  const branchExpansions = useMemo(() => legacyBranchExpansions(investigation), [investigation]);
   const [baseRef, setBaseRef] = useState('main');
   const [headRef, setHeadRef] = useState('WORKTREE');
   const [review, setReview] = useState<LocalReview>();
-  const [selected, setSelected] = useState<string>();
-  const [upstreamDepth, setUpstreamDepth] = useState<ProjectionDepth>(1);
-  const [downstreamDepth, setDownstreamDepth] = useState<ProjectionDepth>(2);
-  const [enabledRelationships, setEnabledRelationships] = useState<Set<EdgeKind>>(() => new Set(MODE_RELATIONSHIPS.impact));
-  const [branchExpansions, setBranchExpansions] = useState<BranchExpansions>({});
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => {
     setReview(undefined);
-    setSelected(undefined);
-    setBranchExpansions({});
     if (!active) return;
     let current = true;
     fetch(`/api/repositories/${active.id}/reviews/latest`)
@@ -333,12 +336,20 @@ function ReviewScreen({ theme, focusMode, setFocusMode, railOpen }: GraphViewPro
       .then((value) => { if (current && value) setReview(value) });
     return () => { current = false };
   }, [active?.id]);
+  useEffect(() => {
+    if (review) dispatch({ type: 'resetContext', contextKey: `review:${active?.id ?? 'none'}:${review.id}`, projectionId: 'impact' });
+  }, [active?.id, review?.id, dispatch]);
   const run = async () => {
     if (!active) return;
     setLoading(true); setError(undefined);
     try {
       const response = await fetch(`/api/repositories/${active.id}/reviews`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseRef, headRef }) });
-      const body = await response.json(); if (!response.ok) throw new Error(body.error ?? 'Review failed'); setReview(body); setSelected(undefined); setBranchExpansions({});
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? 'Review failed');
+      setReview(body);
+      dispatch({ type: 'setProjection', projectionId: 'impact' });
+      dispatch({ type: 'setFocalNode', nodeId: undefined });
+      dispatch({ type: 'clearRelationshipOverrides' });
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setLoading(false) }
   };
@@ -351,12 +362,12 @@ function ReviewScreen({ theme, focusMode, setFocusMode, railOpen }: GraphViewPro
   const selectGraphNode = (id: string) => {
     const aggregate = graph.aggregates.find((item) => item.nodeId === id);
     if (aggregate) {
-      setBranchExpansions((current) => ({ ...current, [aggregate.branchKey]: (current[aggregate.branchKey] ?? 0) + 1 }));
+      dispatch({ type: 'expandFrontier', frontierId: aggregate.branchKey });
       return;
     }
-    setSelected(id);
+    dispatch({ type: 'setFocalNode', nodeId: id });
   };
-  const toggleRelationship = (kind: EdgeKind) => setEnabledRelationships((current) => { const next = new Set(current); if (next.has(kind)) next.delete(kind); else next.add(kind); return next });
+  const toggleRelationship = (kind: EdgeKind) => dispatch({ type: 'setRelationshipOverride', kind, value: enabledRelationships.has(kind) ? 'exclude' : 'include' });
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!focusMode && <header className="border-b border-zinc-800 px-4 py-3">
@@ -372,7 +383,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode, railOpen }: GraphViewPro
         <div className="mt-3 flex gap-5 font-mono text-[10px] text-zinc-400"><span className="text-emerald-300">+{review.summary.addedNodes} nodes</span><span className="text-red-300">−{review.summary.removedNodes} nodes</span><span>{review.summary.modifiedNodes} modified</span><span>{review.summary.addedEdges} added edges</span><span>{review.summary.newViolations} new violations</span><span>{review.contractDiff.changes.length} contract changes</span><span>{graph.nodes.length} visible</span></div>
         {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
       </header>}
-      {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={setUpstreamDepth} setDownstream={setDownstreamDepth} relationships={MODE_RELATIONSHIPS.impact} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, review.nodes)} collapseBranch={(key) => setBranchExpansions((current) => { const next = { ...current }; delete next[key]; return next })} />}
+      {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS.impact} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, review.nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}
       <div className={cn('grid min-h-0 flex-1', !focusMode && inspectorOpen ? 'grid-cols-[1fr_360px]' : 'grid-cols-1')}>
         <div className="relative min-w-0"><SystemGraph nodes={graph.nodes} edges={graph.edges} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={`${review.id}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</div>
         {!focusMode && inspectorOpen && <aside className="overflow-y-auto border-l border-zinc-800"><div className="border-b border-zinc-800 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Review findings</div>{review.newViolations.map((violation) => <div key={violation.id} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone="red">NEW</Badge><span className="font-mono text-[10px] text-zinc-500">{violation.ruleId}</span></div><div className="mt-1 text-[11px] text-zinc-200">{violation.title}</div><div className="mt-1 text-[10px] text-zinc-500">{violation.detail}</div></div>)}{review.contractDiff.changes.map((change) => <div key={change.contractId} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone={change.compatibility === 'break' ? 'red' : change.compatibility === 'potential' ? 'orange' : 'green'}>{change.compatibility.toUpperCase()}</Badge><span className="text-[11px] text-zinc-200">{change.name}</span></div><div className="mt-1 text-[10px] text-zinc-500">{change.fields.length} semantic field changes</div></div>)}{review.newViolations.length === 0 && review.contractDiff.changes.length === 0 && <div className="p-4 text-[11px] text-zinc-500">No new deterministic findings or contract changes.</div>}</aside>}

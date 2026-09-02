@@ -1,0 +1,6 @@
+.DS_Store
+.aegir/
+bin/
+node_modules/
+web/node_modules/
+web/dist/

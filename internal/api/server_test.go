@@ -1,0 +1,152 @@
+package api
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	contractdiff "github.com/and1truong/aegir/internal/contracts"
+	"github.com/and1truong/aegir/internal/store"
+)
+
+func TestRepositoryIndexAndImpactFlow(t *testing.T) {
+	repositoryPath := filepath.Join(t.TempDir(), "service")
+	for path, body := range map[string]string{
+		".git/HEAD":       "0123456789abcdef\n",
+		"go.mod":          "module example.com/service\n\ngo 1.24\n",
+		"service.go":      "package service\nfunc Public() { helper() }\nfunc helper() {}\n",
+		"service_test.go": "package service\nimport \"testing\"\nfunc TestPublic(t *testing.T) { Public() }\n",
+		"coverage.out":    "mode: set\nexample.com/service/service.go:2.1,2.27 1 1\nexample.com/service/service.go:3.1,3.17 1 0\n",
+		"telemetry.json":  `[{"label":"Public","rpm":120,"p99":42,"window":"5m","source":"test-export"}]`,
+		"openapi.yaml":    "openapi: 3.1.0\ncomponents:\n  schemas:\n    Order:\n      type: object\n",
+	} {
+		full := filepath.Join(repositoryPath, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	database, err := store.Open(filepath.Join(t.TempDir(), "aegir.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	handler := New(database, "")
+
+	body, _ := json.Marshal(map[string]any{"path": repositoryPath, "index": true, "coveragePath": "coverage.out", "telemetryPath": "telemetry.json"})
+	request := httptest.NewRequest(http.MethodPost, "/api/repositories", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("register: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var snapshot store.Snapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Repository.Status != "ready" || len(snapshot.Nodes) == 0 || len(snapshot.Edges) == 0 {
+		t.Fatalf("unexpected snapshot: %#v", snapshot.Stats)
+	}
+	measured := false
+	for _, coverage := range snapshot.Analysis.Coverage {
+		measured = measured || coverage.Line == 100
+	}
+	if !measured {
+		t.Fatal("expected imported coverprofile measurement")
+	}
+	if len(snapshot.Analysis.Telemetry) != 1 || snapshot.Analysis.Telemetry[0].P99 != 42 {
+		t.Fatalf("expected imported runtime measurement, got %#v", snapshot.Analysis.Telemetry)
+	}
+
+	var publicID string
+	for _, node := range snapshot.Nodes {
+		if node.Label == "Public" {
+			publicID = node.ID
+			break
+		}
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/repositories/"+snapshot.Repository.ID+"/impact?nodeId="+publicID+"&depth=3", nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("impact: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var impact struct {
+		Root  string `json:"root"`
+		Nodes []any  `json:"nodes"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &impact); err != nil {
+		t.Fatal(err)
+	}
+	if impact.Root != publicID || len(impact.Nodes) == 0 {
+		t.Fatalf("unexpected impact response: %#v", impact)
+	}
+
+	headContract := "openapi: 3.1.0\ncomponents:\n  schemas:\n    Order:\n      type: object\n      required: [id]\n      properties:\n        id:\n          type: string\n"
+	if err := os.WriteFile(filepath.Join(repositoryPath, "openapi.yaml"), []byte(headContract), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/repositories/"+snapshot.Repository.ID+"/index", bytes.NewReader([]byte(`{}`)))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("reindex: status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/repositories/"+snapshot.Repository.ID+"/contracts/diff", nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("contract diff: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var diff contractdiff.Diff
+	if err := json.Unmarshal(response.Body.Bytes(), &diff); err != nil {
+		t.Fatal(err)
+	}
+	if len(diff.Changes) != 1 || diff.Changes[0].Compatibility != "break" {
+		t.Fatalf("unexpected contract diff: %#v", diff)
+	}
+}
+
+func TestRejectsUntrustedBrowserOrigin(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "aegir.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	request := httptest.NewRequest(http.MethodGet, "/api/repositories", nil)
+	request.Header.Set("Origin", "https://untrusted.example")
+	response := httptest.NewRecorder()
+	New(database, "").ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAllowsLoopbackBrowserOrigins(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "aegir.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	for _, origin := range []string{"http://127.0.0.1:4123", "http://localhost:5173", "http://[::1]:4123"} {
+		t.Run(origin, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/repositories", nil)
+			request.Header.Set("Origin", origin)
+			response := httptest.NewRecorder()
+			New(database, "").ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Access-Control-Allow-Origin"); got != origin {
+				t.Fatalf("allow-origin=%q want %q", got, origin)
+			}
+		})
+	}
+}

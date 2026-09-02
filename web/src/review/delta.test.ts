@@ -37,10 +37,13 @@ test('reconstructs base and head views from typed before and after bodies', () =
 });
 
 test('keeps legacy modified bodies when the base side was not retained', () => {
-  const legacyNodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A', pr: 'modified' }, { id: 'b', kind: 'function', label: 'B' }];
-  const legacyEdges: SysEdge[] = [{ id: 'a|calls|b', source: 'a', target: 'b', kind: 'calls', pr: 'modified' }];
+  const legacyNodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'Head A', pr: 'modified' }, { id: 'b', kind: 'function', label: 'B' }];
+  const legacyEdges: SysEdge[] = [{ id: 'a|calls|b', source: 'a', target: 'b', kind: 'calls', label: 'head call', pr: 'modified' }];
   const review = { nodes: legacyNodes, edges: legacyEdges };
-  const graph = graphForReviewSnapshot(review, adaptGraphDelta(review), 'base');
-  assert.deepEqual(graph.nodes.map((node) => node.id), ['a', 'b']);
-  assert.deepEqual(graph.edges.map((edge) => edge.id), ['a|calls|b']);
+  const delta = adaptGraphDelta(review);
+  assert.deepEqual(graphForReviewSnapshot(review, delta, 'base').nodes.map((node) => node.id), ['a', 'b']);
+  const archived = { nodes: [{ ...legacyNodes[0], label: 'Base A' }, legacyNodes[1]], edges: [{ ...legacyEdges[0], label: 'base call' }] };
+  const graph = graphForReviewSnapshot(review, delta, 'base', archived);
+  assert.equal(graph.nodes.find((node) => node.id === 'a')?.label, 'Base A');
+  assert.equal(graph.edges[0].label, 'base call');
 });

@@ -43,6 +43,7 @@ interface ProductState {
   selectSnapshot: (id: number) => Promise<void>;
   addRepository: (path: string) => Promise<void>;
   reindex: (coveragePath?: string, telemetryPath?: string) => Promise<void>;
+  refreshTimeline: () => Promise<void>;
   clearError: () => void;
 }
 
@@ -110,7 +111,12 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
     finally { setLoading(false) }
   }, [active, snapshot?.id]);
 
-  const value = useMemo<ProductState>(() => ({ repositories, active, snapshot, timeline, loading, error, selectRepository: setActiveID, selectSnapshot, addRepository, reindex, clearError: () => setError(undefined) }), [repositories, active, snapshot, timeline, loading, error, selectSnapshot, addRepository, reindex]);
+  const refreshTimeline = useCallback(async () => {
+    if (!active) return;
+    setTimeline(await api<Timeline>(`/api/repositories/${active.id}/timeline`));
+  }, [active]);
+
+  const value = useMemo<ProductState>(() => ({ repositories, active, snapshot, timeline, loading, error, selectRepository: setActiveID, selectSnapshot, addRepository, reindex, refreshTimeline, clearError: () => setError(undefined) }), [repositories, active, snapshot, timeline, loading, error, selectSnapshot, addRepository, reindex, refreshTimeline]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 

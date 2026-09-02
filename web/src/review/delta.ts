@@ -72,19 +72,21 @@ export function graphForReviewPolicy(review: DeltaReviewLike, delta: GraphDelta,
   return { nodes, edges: changedEdges.sort((a, b) => a.id.localeCompare(b.id)) };
 }
 
-export function graphForReviewSnapshot(review: DeltaReviewLike, delta: GraphDelta, side: 'base' | 'head') {
+export function graphForReviewSnapshot(review: DeltaReviewLike, delta: GraphDelta, side: 'base' | 'head', archived?: { nodes: SysNode[]; edges: SysEdge[] }) {
   const nodeDelta = new Map(delta.nodes.map((entry) => [entry.id, entry]));
   const edgeDelta = new Map(delta.edges.map((entry) => [entry.id, entry]));
+  const archivedNodes = new Map(archived?.nodes.map((node) => [node.id, node]));
+  const archivedEdges = new Map(archived?.edges.map((edge) => [edge.id, edge]));
   const nodes = review.nodes.flatMap((node) => {
     const entry = nodeDelta.get(node.id);
     const selected = entry ? (side === 'base' ? entry.before : entry.after) : node;
-    const body = selected ?? (entry?.status === 'modified' ? node : undefined);
+    const body = selected ?? (entry?.status === 'modified' ? archivedNodes.get(node.id) ?? node : undefined);
     return body ? [{ ...body, pr: undefined }] : [];
   });
   const edges = review.edges.flatMap((edge) => {
     const entry = edgeDelta.get(edge.id);
     const selected = entry ? (side === 'base' ? entry.before : entry.after) : edge;
-    const body = selected ?? (entry?.status === 'modified' ? edge : undefined);
+    const body = selected ?? (entry?.status === 'modified' ? archivedEdges.get(edge.id) ?? edge : undefined);
     return body ? [{ ...body, pr: undefined }] : [];
   });
   return {

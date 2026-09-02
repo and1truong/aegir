@@ -483,7 +483,7 @@ function ArchitectureEvolutionBar({ changes, loading, open }: { changes: Archite
 }
 
 function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
-  const { active } = useProduct();
+  const { active, refreshTimeline } = useProduct();
   const { state: investigation, dispatch } = useInvestigation();
   const selected = investigation.focalNodeId;
   const { upstream: upstreamDepth, downstream: downstreamDepth } = investigation.depth;
@@ -500,7 +500,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [reviewSnapshotSide, setReviewSnapshotSide] = useState<'base' | 'delta' | 'head'>('delta');
   const [edgePrototypeStage, setEdgePrototypeStage] = useState<EdgePrototypeStage>(1);
   const delta = useMemo(() => review ? adaptGraphDelta(review) : { nodes: [], edges: [] }, [review]);
-  const policyGraph = useMemo(() => review ? reviewSnapshotSide === 'delta' ? graphForReviewPolicy(review, delta, reviewPolicy) : graphForReviewSnapshot(review, delta, reviewSnapshotSide) : { nodes: [], edges: [] }, [review, delta, reviewPolicy, reviewSnapshotSide]);
+  const policyGraph = useMemo(() => review ? reviewSnapshotSide === 'delta' ? graphForReviewPolicy(review, delta, reviewPolicy) : graphForReviewSnapshot(review, delta, reviewSnapshotSide, reviewSnapshots[reviewSnapshotSide]) : { nodes: [], edges: [] }, [review, delta, reviewPolicy, reviewSnapshotSide, reviewSnapshots]);
   const canonicalReviewIndex = useMemo(() => createGraphIndex(policyGraph.nodes, policyGraph.edges, review?.evidence ?? []), [policyGraph, review?.evidence]);
   const reviewAbstractionGraph = useMemo(() => abstractGraph(canonicalReviewIndex, investigation.abstraction), [canonicalReviewIndex, investigation.abstraction]);
   const reviewIndex = reviewAbstractionGraph.index;
@@ -548,6 +548,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? 'Review failed');
       setReview(body);
+      await refreshTimeline();
       dispatch({ type: 'setProjection', projectionId: 'impact' });
       dispatch({ type: 'setFocalNode', nodeId: undefined });
       dispatch({ type: 'clearRelationshipOverrides' });

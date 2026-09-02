@@ -170,8 +170,49 @@ CREATE INDEX IF NOT EXISTS idx_reviews_repository ON reviews(repository_id, crea
 	if _, err := s.db.ExecContext(ctx, `UPDATE snapshots SET is_current=1 WHERE id IN (SELECT MAX(id) FROM snapshots WHERE snapshot_kind='index' GROUP BY repository_id) AND NOT EXISTS (SELECT 1 FROM snapshots current WHERE current.repository_id=snapshots.repository_id AND current.is_current=1 AND current.snapshot_kind='index')`); err != nil {
 		return err
 	}
+	if err := s.backfillSnapshotFingerprints(ctx); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_snapshots_current ON snapshots(repository_id,is_current,id DESC)`)
 	return err
+}
+
+func (s *Store) backfillSnapshotFingerprints(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT repository_id,id FROM snapshots WHERE fingerprint='' ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	type key struct {
+		repositoryID string
+		snapshotID   int64
+	}
+	keys := []key{}
+	for rows.Next() {
+		var value key
+		if err := rows.Scan(&value.repositoryID, &value.snapshotID); err != nil {
+			rows.Close()
+			return err
+		}
+		keys = append(keys, value)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		snapshot, err := s.SnapshotByID(ctx, key.repositoryID, key.snapshotID)
+		if err != nil {
+			return err
+		}
+		fingerprint := review.SnapshotFingerprint(analyzer.Snapshot{Nodes: snapshot.Nodes, Edges: snapshot.Edges, Evidence: snapshot.Evidence, Analysis: snapshot.Analysis})
+		if _, err := s.db.ExecContext(ctx, `UPDATE snapshots SET fingerprint=? WHERE repository_id=? AND id=? AND fingerprint=''`, fingerprint, key.repositoryID, key.snapshotID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) ensureSnapshotColumn(ctx context.Context, name, definition string) error {
@@ -417,7 +458,7 @@ func (s *Store) Review(ctx context.Context, repositoryID, id string) (review.Rev
 
 func (s *Store) LatestReview(ctx context.Context, repositoryID string) (review.Review, error) {
 	var body string
-	if err := s.db.QueryRowContext(ctx, `SELECT body_json FROM reviews WHERE repository_id=? ORDER BY created_at DESC LIMIT 1`, repositoryID).Scan(&body); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT body_json FROM reviews WHERE repository_id=? ORDER BY created_at DESC,head_snapshot_id DESC,id DESC LIMIT 1`, repositoryID).Scan(&body); err != nil {
 		return review.Review{}, err
 	}
 	var value review.Review
@@ -429,7 +470,7 @@ func (s *Store) LatestReview(ctx context.Context, repositoryID string) (review.R
 }
 
 func (s *Store) Reviews(ctx context.Context, repositoryID string) ([]review.Review, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT body_json FROM reviews WHERE repository_id=? ORDER BY created_at,id`, repositoryID)
+	rows, err := s.db.QueryContext(ctx, `SELECT body_json FROM reviews WHERE repository_id=? ORDER BY created_at,head_snapshot_id,id`, repositoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +536,7 @@ func (s *Store) CompactTimeline(ctx context.Context, repositoryID string, keepRe
 	defer tx.Rollback()
 	var beforeBytes int64
 	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(pgsize),0) FROM dbstat`).Scan(&beforeBytes)
-	deletedReviews, err := tx.ExecContext(ctx, `DELETE FROM reviews WHERE repository_id=? AND id NOT IN (SELECT id FROM reviews WHERE repository_id=? ORDER BY created_at DESC,id DESC LIMIT ?)`, repositoryID, repositoryID, keepReviews)
+	deletedReviews, err := tx.ExecContext(ctx, `DELETE FROM reviews WHERE repository_id=? AND id NOT IN (SELECT id FROM reviews WHERE repository_id=? ORDER BY created_at DESC,head_snapshot_id DESC,id DESC LIMIT ?)`, repositoryID, repositoryID, keepReviews)
 	if err != nil {
 		return CompactionResult{}, err
 	}

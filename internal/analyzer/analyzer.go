@@ -172,17 +172,18 @@ type function struct {
 }
 
 type indexer struct {
-	root      string
-	module    string
-	serviceID string
-	fset      *token.FileSet
-	nodes     map[string]Node
-	edges     map[string]Edge
-	evidence  map[string]EvidenceRecord
-	functions []function
-	byPackage map[string]map[string]string
-	packages  map[string]string
-	contracts []Contract
+	root        string
+	module      string
+	serviceName string
+	serviceID   string
+	fset        *token.FileSet
+	nodes       map[string]Node
+	edges       map[string]Edge
+	evidence    map[string]EvidenceRecord
+	functions   []function
+	byPackage   map[string]map[string]string
+	packages    map[string]string
+	contracts   []Contract
 }
 
 func stableID(kind, value string) string {
@@ -311,7 +312,7 @@ func newIndexer(root, repositoryName string) *indexer {
 		name = filepath.Base(root)
 	}
 	return &indexer{
-		root: root, module: readModule(root), serviceID: stableID("service", name), fset: token.NewFileSet(),
+		root: root, module: readModule(root), serviceName: name, serviceID: stableID("service", name), fset: token.NewFileSet(),
 		nodes: map[string]Node{}, edges: map[string]Edge{}, evidence: map[string]EvidenceRecord{}, byPackage: map[string]map[string]string{}, packages: map[string]string{}, contracts: []Contract{},
 	}
 }
@@ -359,7 +360,7 @@ func ignoredDir(name string) bool {
 }
 
 func (x *indexer) collect() error {
-	service := Node{ID: x.serviceID, Kind: "service", Label: filepath.Base(x.root), File: ".", Description: "Repository root", Meta: map[string]any{"module": x.module}}
+	service := Node{ID: x.serviceID, Kind: "service", Label: x.serviceName, File: ".", Description: "Repository root", Meta: map[string]any{"module": x.module}}
 	x.nodes[service.ID] = service
 	return filepath.WalkDir(x.root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {

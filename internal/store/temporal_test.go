@@ -191,9 +191,13 @@ func TestMigrationClassifiesLegacyReviewSnapshotsBeforeRecoveringCurrent(t *test
 	_, err = db.Exec(`
 CREATE TABLE repositories (id TEXT PRIMARY KEY,name TEXT NOT NULL,path TEXT NOT NULL UNIQUE,module TEXT NOT NULL DEFAULT '',head TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'registered',last_indexed_at TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '');
 CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT,repository_id TEXT NOT NULL REFERENCES repositories(id),created_at TEXT NOT NULL,head TEXT NOT NULL DEFAULT '',stats_json TEXT NOT NULL);
+CREATE TABLE nodes (snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),node_id TEXT NOT NULL,kind TEXT NOT NULL,label TEXT NOT NULL,body_json TEXT NOT NULL,PRIMARY KEY(snapshot_id,node_id));
+CREATE TABLE analyses (snapshot_id INTEGER PRIMARY KEY REFERENCES snapshots(id),body_json TEXT NOT NULL);
 CREATE TABLE reviews (id TEXT PRIMARY KEY,repository_id TEXT NOT NULL REFERENCES repositories(id),created_at TEXT NOT NULL,base_snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),head_snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),body_json TEXT NOT NULL);
 INSERT INTO repositories(id,name,path,status) VALUES('repo','repo','/repo','ready');
 INSERT INTO snapshots(id,repository_id,created_at,head,stats_json) VALUES(1,'repo','2026-01-01T00:00:00Z','index','{}'),(2,'repo','2026-01-02T00:00:00Z','base','{}'),(3,'repo','2026-01-03T00:00:00Z','head','{}');
+INSERT INTO nodes(snapshot_id,node_id,kind,label,body_json) VALUES(1,'node','function','one','{"id":"node","kind":"function","label":"one"}'),(2,'node','function','two','{"id":"node","kind":"function","label":"two"}'),(3,'node','function','three','{"id":"node","kind":"function","label":"three"}');
+INSERT INTO analyses(snapshot_id,body_json) VALUES(1,'{}'),(2,'{}'),(3,'{}');
 INSERT INTO reviews(id,repository_id,created_at,base_snapshot_id,head_snapshot_id,body_json) VALUES('review','repo','2026-01-03T00:00:00Z',2,3,'{}');`)
 	if err != nil {
 		t.Fatal(err)
@@ -206,18 +210,23 @@ INSERT INTO reviews(id,repository_id,created_at,base_snapshot_id,head_snapshot_i
 		t.Fatal(err)
 	}
 	defer value.Close()
-	rows, err := value.db.Query(`SELECT id,snapshot_kind,is_current FROM snapshots ORDER BY id`)
+	rows, err := value.db.Query(`SELECT id,snapshot_kind,is_current,fingerprint FROM snapshots ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	got := []string{}
+	fingerprints := map[string]bool{}
 	for rows.Next() {
 		var id, current int
-		var kind string
-		if err := rows.Scan(&id, &kind, &current); err != nil {
+		var kind, fingerprint string
+		if err := rows.Scan(&id, &kind, &current, &fingerprint); err != nil {
 			t.Fatal(err)
 		}
+		if fingerprint == "" {
+			t.Fatalf("snapshot %d has no backfilled fingerprint", id)
+		}
+		fingerprints[fingerprint] = true
 		got = append(got, fmt.Sprintf("%d:%s:%d", id, kind, current))
 	}
 	if err := rows.Err(); err != nil {
@@ -225,6 +234,9 @@ INSERT INTO reviews(id,repository_id,created_at,base_snapshot_id,head_snapshot_i
 	}
 	if strings.Join(got, ",") != "1:index:1,2:review:0,3:review:0" {
 		t.Fatalf("unexpected migrated snapshots: %v", got)
+	}
+	if len(fingerprints) != 3 {
+		t.Fatalf("expected distinct backfilled fingerprints, got %d", len(fingerprints))
 	}
 }
 
@@ -234,7 +246,8 @@ func TestTimelineIsDeterministicAndCompactsOldReviews(t *testing.T) {
 	if _, err := value.SaveSnapshot(ctx, repository.ID, temporalSnapshot("current")); err != nil {
 		t.Fatal(err)
 	}
-	for index, edge := range []analyzer.Edge{{ID: "a|calls|b", Source: "a", Target: "b", Kind: "calls"}, {ID: "a|depends_on|b", Source: "a", Target: "b", Kind: "depends_on"}} {
+	latestID := ""
+	for _, edge := range []analyzer.Edge{{ID: "a|calls|b", Source: "a", Target: "b", Kind: "calls"}, {ID: "a|depends_on|b", Source: "a", Target: "b", Kind: "depends_on"}} {
 		base, err := value.SaveHistoricalSnapshot(ctx, repository.ID, temporalSnapshot(edge.Kind+"-base"))
 		if err != nil {
 			t.Fatal(err)
@@ -244,10 +257,18 @@ func TestTimelineIsDeterministicAndCompactsOldReviews(t *testing.T) {
 			t.Fatal(err)
 		}
 		item := review.Compare(repository.ID, base.Ref.Commit, head.Ref.Commit, base.ID, head.ID, temporalSnapshot(base.Ref.Commit), temporalSnapshot(head.Ref.Commit, edge))
-		item.CreatedAt = []string{"2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"}[index]
+		item.CreatedAt = "2026-01-01T00:00:00Z"
 		if err := value.SaveReview(ctx, item); err != nil {
 			t.Fatal(err)
 		}
+		latestID = item.ID
+	}
+	latest, err := value.LatestReview(ctx, repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.ID != latestID {
+		t.Fatalf("latest review=%s want %s", latest.ID, latestID)
 	}
 	timeline, err := value.Timeline(ctx, repository.ID)
 	if err != nil {
@@ -267,7 +288,7 @@ func TestTimelineIsDeterministicAndCompactsOldReviews(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(timeline.Snapshots) != 3 || len(timeline.Reviews) != 1 {
+	if len(timeline.Snapshots) != 3 || len(timeline.Reviews) != 1 || timeline.Reviews[0].ID != latestID {
 		t.Fatalf("unexpected compacted timeline: snapshots=%d reviews=%d", len(timeline.Snapshots), len(timeline.Reviews))
 	}
 	if _, err := value.SnapshotByID(ctx, repository.ID, 2); !errors.Is(err, sql.ErrNoRows) {

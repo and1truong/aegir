@@ -62,6 +62,40 @@ func TestCompareReviewIDIncludesComparedEdgeFields(t *testing.T) {
 	}
 }
 
+func TestCompareReviewIDIncludesCanonicalNodeFields(t *testing.T) {
+	baseNode := analyzer.Node{ID: "node", Kind: "function", Label: "Run", Service: "service", Package: "pkg", File: "run.go", Description: "description", Tags: []string{"a"}, Meta: map[string]any{"fingerprint": "same", "owner": "one"}}
+	base := analyzer.Snapshot{Nodes: []analyzer.Node{baseNode}}
+	unchangedID := Compare("repo", "base", "head", 1, 2, base, base).ID
+	tests := map[string]func(*analyzer.Node){
+		"kind":        func(node *analyzer.Node) { node.Kind = "method" },
+		"label":       func(node *analyzer.Node) { node.Label = "Execute" },
+		"service":     func(node *analyzer.Node) { node.Service = "other" },
+		"package":     func(node *analyzer.Node) { node.Package = "other" },
+		"file":        func(node *analyzer.Node) { node.File = "other.go" },
+		"description": func(node *analyzer.Node) { node.Description = "other" },
+		"tags":        func(node *analyzer.Node) { node.Tags = []string{"b"} },
+		"metadata":    func(node *analyzer.Node) { node.Meta["owner"] = "two" },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			headNode := baseNode
+			headNode.Meta = map[string]any{"fingerprint": "same", "owner": "one"}
+			mutate(&headNode)
+			result := Compare("repo", "base", "head", 1, 2, base, analyzer.Snapshot{Nodes: []analyzer.Node{headNode}})
+			if result.ID == unchangedID || result.Summary.ModifiedNodes != 1 {
+				t.Fatalf("node change was not represented: id=%s summary=%#v", result.ID, result.Summary)
+			}
+		})
+	}
+	reordered := baseNode
+	reordered.Tags = []string{"b", "a"}
+	ordered := baseNode
+	ordered.Tags = []string{"a", "b"}
+	if Compare("repo", "base", "head", 1, 2, analyzer.Snapshot{Nodes: []analyzer.Node{ordered}}, analyzer.Snapshot{Nodes: []analyzer.Node{ordered}}).ID != Compare("repo", "base", "head", 3, 4, analyzer.Snapshot{Nodes: []analyzer.Node{reordered}}, analyzer.Snapshot{Nodes: []analyzer.Node{reordered}}).ID {
+		t.Fatal("tag ordering changed canonical node identity")
+	}
+}
+
 func TestCompareReviewIDCanonicalizesSnapshotOrdering(t *testing.T) {
 	first := analyzer.Snapshot{
 		Analysis: analyzer.Analysis{

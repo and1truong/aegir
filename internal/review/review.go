@@ -322,6 +322,9 @@ func nodeChangeReasons(before, after analyzer.Node) []ChangeReason {
 	if strings.Join(before.Tags, "\x00") != strings.Join(after.Tags, "\x00") {
 		reasons = append(reasons, ChangeReason{Kind: "classification-changed", Detail: "Node tags changed."})
 	}
+	if !reflect.DeepEqual(before.Meta, after.Meta) {
+		reasons = append(reasons, ChangeReason{Kind: "metadata-changed", Detail: "Node metadata changed."})
+	}
 	if len(reasons) == 0 {
 		reasons = append(reasons, ChangeReason{Kind: "implementation-changed", Detail: "The indexed implementation fingerprint changed."})
 	}
@@ -436,11 +439,17 @@ func telemetryMap(values []analyzer.Telemetry) map[string]analyzer.Telemetry {
 	return out
 }
 func nodeFingerprint(node analyzer.Node) string {
-	if node.Meta == nil {
-		return ""
+	node.Change = ""
+	node.Tags = append([]string(nil), node.Tags...)
+	sort.Strings(node.Tags)
+	if len(node.Tags) == 0 {
+		node.Tags = nil
 	}
-	value, _ := node.Meta["fingerprint"].(string)
-	return value
+	if len(node.Meta) == 0 {
+		node.Meta = nil
+	}
+	value, _ := json.Marshal(node)
+	return string(value)
 }
 
 func edgeFingerprint(edge analyzer.Edge) string {

@@ -71,3 +71,22 @@ export function graphForReviewPolicy(review: DeltaReviewLike, delta: GraphDelta,
   }).sort((a, b) => a.id.localeCompare(b.id));
   return { nodes, edges: changedEdges.sort((a, b) => a.id.localeCompare(b.id)) };
 }
+
+export function graphForReviewSnapshot(review: DeltaReviewLike, delta: GraphDelta, side: 'base' | 'head') {
+  const nodeDelta = new Map(delta.nodes.map((entry) => [entry.id, entry]));
+  const edgeDelta = new Map(delta.edges.map((entry) => [entry.id, entry]));
+  const nodes = review.nodes.flatMap((node) => {
+    const entry = nodeDelta.get(node.id);
+    const body = entry ? (side === 'base' ? entry.before : entry.after) : node;
+    return body ? [{ ...body, pr: undefined }] : [];
+  });
+  const edges = review.edges.flatMap((edge) => {
+    const entry = edgeDelta.get(edge.id);
+    const body = entry ? (side === 'base' ? entry.before : entry.after) : edge;
+    return body ? [{ ...body, pr: undefined }] : [];
+  });
+  return {
+    nodes: nodes.sort((left, right) => left.id.localeCompare(right.id)),
+    edges: edges.sort((left, right) => left.id.localeCompare(right.id)),
+  };
+}

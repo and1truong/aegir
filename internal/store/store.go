@@ -31,12 +31,38 @@ type Repository struct {
 type Snapshot struct {
 	ID         int64                     `json:"id"`
 	CreatedAt  string                    `json:"createdAt"`
+	Ref        SnapshotRef               `json:"ref"`
 	Repository Repository                `json:"repository"`
 	Nodes      []analyzer.Node           `json:"nodes"`
 	Edges      []analyzer.Edge           `json:"edges"`
 	Evidence   []analyzer.EvidenceRecord `json:"evidence"`
 	Analysis   analyzer.Analysis         `json:"analysis"`
 	Stats      map[string]int            `json:"stats"`
+}
+
+const SnapshotRefVersion = 1
+
+type SnapshotRef struct {
+	Version      int    `json:"version"`
+	RepositoryID string `json:"repositoryId"`
+	SnapshotID   int64  `json:"snapshotId"`
+	Commit       string `json:"commit,omitempty"`
+	CreatedAt    string `json:"createdAt"`
+	Kind         string `json:"kind"`
+	Fingerprint  string `json:"fingerprint"`
+	StorageBytes int64  `json:"storageBytes"`
+}
+
+type Timeline struct {
+	Version   int             `json:"version"`
+	Snapshots []SnapshotRef   `json:"snapshots"`
+	Reviews   []review.Review `json:"reviews"`
+}
+
+type CompactionResult struct {
+	DeletedReviews   int64 `json:"deletedReviews"`
+	DeletedSnapshots int64 `json:"deletedSnapshots"`
+	ReclaimedBytes   int64 `json:"reclaimedBytes"`
 }
 
 type Store struct{ db *sql.DB }
@@ -61,7 +87,7 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	if _, err := s.db.ExecContext(ctx, `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS repositories (
@@ -126,7 +152,46 @@ CREATE INDEX IF NOT EXISTS idx_edges_snapshot_source ON edges(snapshot_id, sourc
 CREATE INDEX IF NOT EXISTS idx_edges_snapshot_target ON edges(snapshot_id, target);
 CREATE INDEX IF NOT EXISTS idx_evidence_snapshot_subject ON evidence(snapshot_id, subject_kind, subject_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_repository ON reviews(repository_id, created_at DESC);
-`)
+`); err != nil {
+		return err
+	}
+	for _, column := range []struct{ name, definition string }{
+		{"snapshot_kind", "TEXT NOT NULL DEFAULT 'index'"},
+		{"is_current", "INTEGER NOT NULL DEFAULT 0"},
+		{"fingerprint", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureSnapshotColumn(ctx, column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE snapshots SET is_current=1 WHERE id IN (SELECT MAX(id) FROM snapshots GROUP BY repository_id) AND NOT EXISTS (SELECT 1 FROM snapshots current WHERE current.repository_id=snapshots.repository_id AND current.is_current=1)`); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_snapshots_current ON snapshots(repository_id,is_current,id DESC)`)
+	return err
+}
+
+func (s *Store) ensureSnapshotColumn(ctx context.Context, name, definition string) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(snapshots)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var columnName, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		found = found || columnName == name
+	}
+	if err := rows.Err(); err != nil || found {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE snapshots ADD COLUMN `+name+` `+definition)
 	return err
 }
 
@@ -217,7 +282,19 @@ func (s *Store) saveSnapshot(ctx context.Context, repositoryID string, indexed a
 	defer tx.Rollback()
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 	statsJSON, _ := json.Marshal(indexed.Stats)
-	result, err := tx.ExecContext(ctx, `INSERT INTO snapshots(repository_id,created_at,head,stats_json) VALUES(?,?,?,?)`, repositoryID, createdAt, indexed.Repository.Head, string(statsJSON))
+	fingerprintBody, _ := json.Marshal(indexed)
+	fingerprintSum := sha256.Sum256(fingerprintBody)
+	fingerprint := hex.EncodeToString(fingerprintSum[:])
+	kind := "review"
+	isCurrent := 0
+	if updateRepository {
+		kind = "index"
+		isCurrent = 1
+		if _, err := tx.ExecContext(ctx, `UPDATE snapshots SET is_current=0 WHERE repository_id=?`, repositoryID); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO snapshots(repository_id,created_at,head,stats_json,snapshot_kind,is_current,fingerprint) VALUES(?,?,?,?,?,?,?)`, repositoryID, createdAt, indexed.Repository.Head, string(statsJSON), kind, isCurrent, fingerprint)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -294,12 +371,89 @@ func (s *Store) LatestReview(ctx context.Context, repositoryID string) (review.R
 	return value, nil
 }
 
+func (s *Store) Reviews(ctx context.Context, repositoryID string) ([]review.Review, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT body_json FROM reviews WHERE repository_id=? ORDER BY created_at,id`, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := []review.Review{}
+	for rows.Next() {
+		var body string
+		if err := rows.Scan(&body); err != nil {
+			return nil, err
+		}
+		var value review.Review
+		if err := json.Unmarshal([]byte(body), &value); err != nil {
+			return nil, err
+		}
+		review.UpgradeLegacy(&value)
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
 func (s *Store) Snapshot(ctx context.Context, repositoryID string) (Snapshot, error) {
 	var id int64
-	if err := s.db.QueryRowContext(ctx, `SELECT id FROM snapshots WHERE repository_id=? ORDER BY id DESC LIMIT 1`, repositoryID).Scan(&id); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM snapshots WHERE repository_id=? AND is_current=1 ORDER BY id DESC LIMIT 1`, repositoryID).Scan(&id); err != nil {
 		return Snapshot{}, err
 	}
 	return s.SnapshotByID(ctx, repositoryID, id)
+}
+
+func (s *Store) Timeline(ctx context.Context, repositoryID string) (Timeline, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT s.id,s.created_at,s.head,s.snapshot_kind,s.fingerprint,
+		COALESCE(LENGTH(s.stats_json),0)+COALESCE((SELECT SUM(LENGTH(body_json)) FROM nodes WHERE snapshot_id=s.id),0)+COALESCE((SELECT SUM(LENGTH(body_json)) FROM edges WHERE snapshot_id=s.id),0)+COALESCE((SELECT SUM(LENGTH(body_json)) FROM evidence WHERE snapshot_id=s.id),0)+COALESCE((SELECT LENGTH(body_json) FROM analyses WHERE snapshot_id=s.id),0)
+		FROM snapshots s WHERE s.repository_id=? ORDER BY s.created_at,s.id`, repositoryID)
+	if err != nil {
+		return Timeline{}, err
+	}
+	defer rows.Close()
+	refs := []SnapshotRef{}
+	for rows.Next() {
+		ref := SnapshotRef{Version: SnapshotRefVersion, RepositoryID: repositoryID}
+		if err := rows.Scan(&ref.SnapshotID, &ref.CreatedAt, &ref.Commit, &ref.Kind, &ref.Fingerprint, &ref.StorageBytes); err != nil {
+			return Timeline{}, err
+		}
+		refs = append(refs, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return Timeline{}, err
+	}
+	reviews, err := s.Reviews(ctx, repositoryID)
+	if err != nil {
+		return Timeline{}, err
+	}
+	return Timeline{Version: 1, Snapshots: refs, Reviews: reviews}, nil
+}
+
+func (s *Store) CompactTimeline(ctx context.Context, repositoryID string, keepReviews int) (CompactionResult, error) {
+	if keepReviews < 0 {
+		return CompactionResult{}, errors.New("keepReviews must be non-negative")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CompactionResult{}, err
+	}
+	defer tx.Rollback()
+	var beforeBytes int64
+	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(pgsize),0) FROM dbstat`).Scan(&beforeBytes)
+	deletedReviews, err := tx.ExecContext(ctx, `DELETE FROM reviews WHERE repository_id=? AND id NOT IN (SELECT id FROM reviews WHERE repository_id=? ORDER BY created_at DESC,id DESC LIMIT ?)`, repositoryID, repositoryID, keepReviews)
+	if err != nil {
+		return CompactionResult{}, err
+	}
+	deletedSnapshots, err := tx.ExecContext(ctx, `DELETE FROM snapshots WHERE repository_id=? AND is_current=0 AND id NOT IN (SELECT base_snapshot_id FROM reviews WHERE repository_id=? UNION SELECT head_snapshot_id FROM reviews WHERE repository_id=?)`, repositoryID, repositoryID, repositoryID)
+	if err != nil {
+		return CompactionResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CompactionResult{}, err
+	}
+	reviewCount, _ := deletedReviews.RowsAffected()
+	snapshotCount, _ := deletedSnapshots.RowsAffected()
+	var afterBytes int64
+	_ = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(pgsize),0) FROM dbstat`).Scan(&afterBytes)
+	return CompactionResult{DeletedReviews: reviewCount, DeletedSnapshots: snapshotCount, ReclaimedBytes: max(0, beforeBytes-afterBytes)}, nil
 }
 
 func (s *Store) PreviousSnapshot(ctx context.Context, repositoryID string, beforeID int64) (Snapshot, error) {
@@ -317,11 +471,13 @@ func (s *Store) SnapshotByID(ctx context.Context, repositoryID string, id int64)
 	}
 	var snapshot Snapshot
 	var statsJSON string
-	err = s.db.QueryRowContext(ctx, `SELECT id,created_at,stats_json FROM snapshots WHERE repository_id=? AND id=?`, repositoryID, id).Scan(&snapshot.ID, &snapshot.CreatedAt, &statsJSON)
+	var commit, kind, fingerprint string
+	err = s.db.QueryRowContext(ctx, `SELECT id,created_at,head,stats_json,snapshot_kind,fingerprint FROM snapshots WHERE repository_id=? AND id=?`, repositoryID, id).Scan(&snapshot.ID, &snapshot.CreatedAt, &commit, &statsJSON, &kind, &fingerprint)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	snapshot.Repository = repository
+	snapshot.Ref = SnapshotRef{Version: SnapshotRefVersion, RepositoryID: repositoryID, SnapshotID: snapshot.ID, Commit: commit, CreatedAt: snapshot.CreatedAt, Kind: kind, Fingerprint: fingerprint}
 	if err := json.Unmarshal([]byte(statsJSON), &snapshot.Stats); err != nil {
 		return Snapshot{}, err
 	}

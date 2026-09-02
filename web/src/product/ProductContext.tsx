@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { Contract, EvidenceRecord, NodeCoverage, Rule, SysEdge, SysNode, Violation } from '../data/types';
+import type { SnapshotRef, Timeline } from '../temporal/timeline';
 
 export interface Repository {
   id: string;
@@ -15,6 +16,7 @@ export interface Repository {
 export interface ProductSnapshot {
   id: number;
   createdAt: string;
+  ref: SnapshotRef;
   repository: Repository;
   nodes: SysNode[];
   edges: SysEdge[];
@@ -34,9 +36,11 @@ interface ProductState {
   repositories: Repository[];
   active?: Repository;
   snapshot?: ProductSnapshot;
+  timeline?: Timeline;
   loading: boolean;
   error?: string;
   selectRepository: (id: string) => void;
+  selectSnapshot: (id: number) => Promise<void>;
   addRepository: (path: string) => Promise<void>;
   reindex: (coveragePath?: string, telemetryPath?: string) => Promise<void>;
   clearError: () => void;
@@ -55,6 +59,7 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [activeID, setActiveID] = useState(() => window.localStorage.getItem('aegir-repository') ?? '');
   const [snapshot, setSnapshot] = useState<ProductSnapshot>();
+  const [timeline, setTimeline] = useState<Timeline>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const active = repositories.find((repository) => repository.id === activeID) ?? repositories[0];
@@ -70,12 +75,12 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
   }, [refreshRepositories]);
 
   useEffect(() => {
-    if (!active) { setSnapshot(undefined); return; }
+    if (!active) { setSnapshot(undefined); setTimeline(undefined); return; }
     window.localStorage.setItem('aegir-repository', active.id);
-    if (active.status !== 'ready') { setSnapshot(undefined); return; }
+    if (active.status !== 'ready') { setSnapshot(undefined); setTimeline(undefined); return; }
     setLoading(true);
-    api<ProductSnapshot>(`/api/repositories/${active.id}/graph`)
-      .then(setSnapshot)
+    Promise.all([api<ProductSnapshot>(`/api/repositories/${active.id}/graph`), api<Timeline>(`/api/repositories/${active.id}/timeline`)])
+      .then(([nextSnapshot, nextTimeline]) => { setSnapshot(nextSnapshot); setTimeline(nextTimeline) })
       .catch((cause) => setError(cause.message))
       .finally(() => setLoading(false));
   }, [active?.id, active?.status]);
@@ -92,12 +97,20 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
   const reindex = useCallback(async (coveragePath?: string, telemetryPath?: string) => {
     if (!active) return;
     setLoading(true); setError(undefined);
-    try { const indexed = await api<ProductSnapshot>(`/api/repositories/${active.id}/index`, { method: 'POST', body: JSON.stringify({ coveragePath: coveragePath ?? '', telemetryPath: telemetryPath ?? '' }) }); setSnapshot(indexed); await refreshRepositories() }
+    try { const indexed = await api<ProductSnapshot>(`/api/repositories/${active.id}/index`, { method: 'POST', body: JSON.stringify({ coveragePath: coveragePath ?? '', telemetryPath: telemetryPath ?? '' }) }); setSnapshot(indexed); setTimeline(await api<Timeline>(`/api/repositories/${active.id}/timeline`)); await refreshRepositories() }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setLoading(false) }
   }, [active, refreshRepositories]);
 
-  const value = useMemo<ProductState>(() => ({ repositories, active, snapshot, loading, error, selectRepository: setActiveID, addRepository, reindex, clearError: () => setError(undefined) }), [repositories, active, snapshot, loading, error, addRepository, reindex]);
+  const selectSnapshot = useCallback(async (id: number) => {
+    if (!active || id === snapshot?.id) return;
+    setLoading(true); setError(undefined);
+    try { setSnapshot(await api<ProductSnapshot>(`/api/repositories/${active.id}/graph?snapshot=${id}`)) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setLoading(false) }
+  }, [active, snapshot?.id]);
+
+  const value = useMemo<ProductState>(() => ({ repositories, active, snapshot, timeline, loading, error, selectRepository: setActiveID, selectSnapshot, addRepository, reindex, clearError: () => setError(undefined) }), [repositories, active, snapshot, timeline, loading, error, selectSnapshot, addRepository, reindex]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 

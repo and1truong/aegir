@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SysEdge, SysNode } from '../data/types.ts';
-import { adaptGraphDelta, graphForReviewPolicy } from './delta.ts';
+import { adaptGraphDelta, graphForReviewPolicy, graphForReviewSnapshot } from './delta.ts';
 
 const nodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A', pr: 'modified' }, { id: 'b', kind: 'function', label: 'B' }, { id: 'c', kind: 'function', label: 'C' }];
 const edges: SysEdge[] = [{ id: 'a|calls|b', source: 'a', target: 'b', kind: 'calls', pr: 'added' }, { id: 'b|calls|c', source: 'b', target: 'c', kind: 'calls' }];
@@ -24,4 +24,14 @@ test('changes plus impact retains unchanged context', () => {
   const delta = adaptGraphDelta({ nodes, edges });
   const graph = graphForReviewPolicy({ nodes, edges }, delta, 'changes-impact');
   assert.deepEqual(graph.nodes.map((node) => node.id), ['a', 'b', 'c']);
+});
+
+test('reconstructs base and head views from typed before and after bodies', () => {
+  const before = { ...nodes[0], label: 'Before', pr: undefined };
+  const after = { ...nodes[0], label: 'After', pr: undefined };
+  const delta = { nodes: [{ id: 'a', status: 'modified' as const, before, after, changeReasons: [] }], edges: [{ id: edges[0].id, status: 'added' as const, after: edges[0], changeReasons: [] }] };
+  assert.deepEqual(graphForReviewSnapshot({ nodes, edges }, delta, 'base').nodes.find((node) => node.id === 'a')?.label, 'Before');
+  assert.equal(graphForReviewSnapshot({ nodes, edges }, delta, 'base').edges.some((edge) => edge.id === edges[0].id), false);
+  assert.deepEqual(graphForReviewSnapshot({ nodes, edges }, delta, 'head').nodes.find((node) => node.id === 'a')?.label, 'After');
+  assert.equal(graphForReviewSnapshot({ nodes, edges }, delta, 'head').edges.some((edge) => edge.id === edges[0].id), true);
 });

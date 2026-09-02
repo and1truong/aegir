@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { EdgeKind, SysEdge, SysNode } from '../../data/types';
 import { createGraphIndex } from '../index.ts';
-import { projectionDefinition, projectionDefinitions } from './definitions.ts';
+import { projectionDefinition, projectionDefinitions, questionProjectionIds, signalProjectionIds } from './definitions.ts';
 import { frontierId, projectVisibleGraph } from './engine.ts';
 
 const node = (id: string, kind: SysNode['kind'] = 'function'): SysNode => ({ id, kind, label: id });
@@ -61,9 +61,23 @@ test('reports missing roots and accounts for the hard budget deterministically',
 });
 
 test('registers every compatibility projection with declarative policies', () => {
-  assert.deepEqual(Object.keys(projectionDefinitions).sort(), ['complexity', 'contracts', 'coverage', 'data flow', 'dependencies', 'impact', 'lint', 'review', 'runtime']);
+  assert.deepEqual(signalProjectionIds.sort(), ['complexity', 'contracts', 'coverage', 'data flow', 'dependencies', 'impact', 'lint', 'runtime']);
+  assert.equal(questionProjectionIds.length, 7);
   for (const definition of Object.values(projectionDefinitions)) {
     assert.ok(definition.relationshipPolicy.defaultKinds.length > 0);
     assert.deepEqual(definition.defaultDepth, { upstream: 1, downstream: 2 });
   }
+});
+
+test('question presets share depth and budget semantics and degrade missing evidence explicitly', () => {
+  const nodes = [node('root'), node('target', 'external')];
+  const edges = [edge('root', 'target')];
+  const index = createGraphIndex(nodes, edges);
+  for (const id of questionProjectionIds) {
+    const graph = projectVisibleGraph(index, projectionDefinition(id), { activeNodeId: 'root', upstreamDepth: 0, downstreamDepth: 1, nodeBudget: 10 });
+    assert.ok(graph.stats.visibleReal <= 10, id);
+    assert.equal(graph.projectionId, id);
+  }
+  assert.ok(projectVisibleGraph(index, projectionDefinition('hot-path'), { activeNodeId: 'root' }).warnings.some((warning) => warning.code === 'missing-evidence'));
+  assert.ok(projectVisibleGraph(index, projectionDefinition('cross-team-dependencies'), { activeNodeId: 'root' }).warnings.some((warning) => warning.code === 'missing-evidence'));
 });

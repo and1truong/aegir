@@ -98,6 +98,9 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
   const validRequestedRoots = [...new Set(requestedRoots)].filter((id) => index.nodeById.has(id));
   const roots = validRequestedRoots.slice(0, nodeBudget);
   const warnings: VisibleGraph['warnings'] = [];
+  if (definition.evidenceRequirement === 'runtime' && index.telemetryByNode.size === 0) warnings.push({ code: 'missing-evidence', message: 'No runtime edge/path evidence is available; showing static eligible context only.' });
+  if (definition.evidenceRequirement === 'ownership' && ![...index.membership.values()].some((item) => item.owner)) warnings.push({ code: 'missing-evidence', message: 'No ownership data is available; cross-team boundaries cannot be proven.' });
+  if (definition.evidenceRequirement === 'changes' && !index.nodes.some((node) => node.pr) && !index.edges.some((edge) => edge.pr)) warnings.push({ code: 'missing-evidence', message: 'No graph delta is available in this snapshot context.' });
   if (requestedRoots.some((id) => !index.nodeById.has(id))) warnings.push({ code: 'missing-root', message: 'One or more requested roots are not present in this graph context.' });
   if (validRequestedRoots.length > roots.length) warnings.push({ code: 'root-budget', message: `${validRequestedRoots.length - roots.length} roots exceed the real-node budget.` });
   if (roots.length === 0) {

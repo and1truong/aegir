@@ -15,9 +15,10 @@ import { useInvestigation } from '../investigation/InvestigationContext';
 import { enabledRelationships as deriveEnabledRelationships, legacyBranchExpansions } from '../investigation/reducer';
 import { createGraphIndex } from '../graph/index';
 import { evidenceForEdge, formatEvidenceLocation } from '../graph/evidence';
+import { projectionDefinitions, questionProjectionIds, signalProjectionIds } from '../graph/projection/definitions';
 
 type Screen = 'overview' | 'explorer' | 'pulls' | 'rules' | 'search' | 'settings';
-type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint';
+type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint' | 'what-can-break' | 'hot-path' | 'state-mutation' | 'retry-paths' | 'transaction-boundaries' | 'cross-team-dependencies' | 'what-changed-architecturally';
 
 interface ContractDiff {
   baseSnapshotId: number;
@@ -91,6 +92,13 @@ const MODE_RELATIONSHIPS: Record<ExplorerMode, EdgeKind[]> = {
   complexity: ['calls', 'depends_on'],
   contracts: ['calls', 'depends_on', 'publishes', 'consumes'],
   lint: ['calls', 'depends_on', 'reads', 'writes', 'publishes', 'consumes'],
+  'what-can-break': ['calls', 'depends_on', 'implements', 'retries', 'writes', 'publishes', 'consumes'],
+  'hot-path': ['calls', 'publishes', 'consumes'],
+  'state-mutation': ['calls', 'writes', 'publishes'],
+  'retry-paths': ['retries', 'calls'],
+  'transaction-boundaries': ['calls', 'reads', 'writes'],
+  'cross-team-dependencies': ['calls', 'publishes', 'consumes', 'implements'],
+  'what-changed-architecturally': ['calls', 'depends_on', 'reads', 'writes', 'publishes', 'consumes', 'implements'],
 };
 
 function expandedBranchLabels(expansions: BranchExpansions, nodes: SysNode[]): ExpandedBranch[] {
@@ -241,12 +249,15 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
   });
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {!focusMode && <div className="flex h-10 items-center gap-1 border-b border-zinc-800 px-3">
-        {(['dependencies', 'data flow', 'runtime', 'impact', 'coverage', 'complexity', 'contracts', 'lint'] as ExplorerMode[]).map((item) => <button key={item} onClick={() => dispatch({ type: 'setProjection', projectionId: item })} className={cn('rounded-md px-2 py-1.5 text-[11px] capitalize', mode === item ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}>{item}</button>)}
+      {!focusMode && <div className="flex min-h-10 items-center gap-1 border-b border-zinc-800 px-3 py-1">
+        <select aria-label="Investigation question" value={questionProjectionIds.includes(mode) ? mode : ''} onChange={(event) => event.target.value && dispatch({ type: 'setProjection', projectionId: event.target.value })} className="h-7 max-w-[205px] rounded-md border border-sky-900/70 bg-sky-950/30 px-2 text-[11px] text-sky-200 outline-none"><option value="">Ask a graph question…</option>{questionProjectionIds.map((id) => <option key={id} value={id}>{projectionDefinitions[id].label}</option>)}</select>
+        <span className="mx-1 h-5 w-px bg-zinc-800" />
+        {signalProjectionIds.map((item) => <button key={item} onClick={() => dispatch({ type: 'setProjection', projectionId: item })} className={cn('rounded-md px-2 py-1.5 text-[11px] capitalize', mode === item ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}>{item}</button>)}
         <span className="ml-auto font-mono text-[10px] text-zinc-500">{graph.nodes.length} nodes · {graph.edges.length} edges</span>
         <button onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? 'Hide inspector' : 'Show inspector'} title={inspectorOpen ? 'Hide inspector' : 'Show inspector'} className="ml-1 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">{inspectorOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}</button>
         <button onClick={() => setFocusMode(true)} aria-label="Enter focus mode" title="Focus mode" className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><Maximize2 className="h-3.5 w-3.5" /></button>
       </div>}
+      {!focusMode && projectionDefinitions[mode]?.category === 'question' && <div className="flex items-center gap-3 border-b border-zinc-800 bg-sky-950/10 px-3 py-1.5 text-[10.5px]"><span className="font-semibold text-sky-200">{projectionDefinitions[mode].label}</span><span className="text-zinc-500">{projectionDefinitions[mode].description}</span>{graph.visibleGraph.warnings.map((warning) => <span key={`${warning.code}:${warning.message}`} className="ml-auto text-amber-300">{warning.message}</span>)}</div>}
       {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS[mode]} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}
       <div className="flex min-h-0 flex-1">
         {!focusMode && <aside className="flex w-[250px] shrink-0 flex-col border-r border-zinc-800">

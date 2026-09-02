@@ -43,6 +43,8 @@ export interface ProjectionDefinition {
   defaultDepth: { upstream: ProjectionDepth; downstream: ProjectionDepth };
   layoutStrategy: 'dependency-LR' | 'dataflow-LR' | 'review-LR';
   relevanceWeights: RelevanceWeights;
+  category: 'question' | 'signal';
+  evidenceRequirement?: 'runtime' | 'ownership' | 'changes';
 }
 
 export type InclusionReason =
@@ -77,7 +79,7 @@ export type VisibleEdge =
   | { kind: 'frontier-link'; id: string; source: string; target: string; canonicalEdgeIds: string[]; reason: InclusionReason; evidenceIds: string[] };
 
 export interface ProjectionWarning {
-  code: 'missing-root' | 'root-budget' | 'hard-budget';
+  code: 'missing-root' | 'root-budget' | 'hard-budget' | 'missing-evidence';
   message: string;
 }
 

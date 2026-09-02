@@ -27,6 +27,7 @@ import { CommandValidationError, planAgentPhrase, previewCommands, type CommandP
 import { dependencyIntroduction } from '../temporal/timeline';
 import { computeStructuralAnalytics, metricDefinitions, rankStructuralHotspots } from '../analytics/structural';
 import { analyzeArchitectureEvolution, type ArchitectureEvolutionChange } from '../evolution/architecture';
+import { abstractionShortcutForEvent, type ShortcutEventLike } from '../interaction/abstractionShortcuts';
 
 type Screen = 'overview' | 'explorer' | 'pulls' | 'rules' | 'search' | 'settings';
 type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint' | 'what-can-break' | 'hot-path' | 'state-mutation' | 'retry-paths' | 'transaction-boundaries' | 'cross-team-dependencies' | 'what-changed-architecturally';
@@ -609,6 +610,27 @@ function ReviewForm({ baseRef, headRef, setBaseRef, setHeadRef, run, loading, co
   return <div className={cn('flex gap-2', !compact && 'mt-4')}><input value={baseRef} onChange={(event) => setBaseRef(event.target.value)} placeholder="base ref" className="h-8 w-[150px] rounded-md border border-zinc-700 bg-zinc-950 px-2 font-mono text-[10px] outline-none" /><input value={headRef} onChange={(event) => setHeadRef(event.target.value)} placeholder="HEAD or WORKTREE" className="h-8 w-[150px] rounded-md border border-zinc-700 bg-zinc-950 px-2 font-mono text-[10px] outline-none" /><Btn variant="solid" onClick={run} disabled={loading || !baseRef.trim()}>{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitCompare className="h-3.5 w-3.5" />} Analyze</Btn></div>;
 }
 
+function AbstractionShortcutController({ enabled }: { enabled: boolean }) {
+  const { dispatch } = useInvestigation();
+  const [preview, setPreview] = useState('');
+  useEffect(() => {
+    if (!enabled) return;
+    let timer = 0;
+    const handle = (event: KeyboardEvent) => {
+      const shortcut = abstractionShortcutForEvent({ key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey, target: event.target as ShortcutEventLike['target'] });
+      if (!shortcut) return;
+      event.preventDefault();
+      dispatch({ type: 'setAbstraction', abstraction: shortcut.level });
+      setPreview(`${event.key} · ${shortcut.label} — ${shortcut.description}`);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setPreview(''), 1800);
+    };
+    window.addEventListener('keydown', handle);
+    return () => { window.removeEventListener('keydown', handle); window.clearTimeout(timer) };
+  }, [enabled, dispatch]);
+  return preview ? <div role="status" className="fixed right-4 top-4 z-[100] rounded-md border border-sky-800 bg-zinc-950/95 px-3 py-2 text-[10px] text-sky-200 shadow-xl">Prototype semantic zoom · {preview}</div> : null;
+}
+
 export function ProductApp() {
   const { repositories, active, snapshot, loading, error, selectRepository } = useProduct();
   const [theme, setTheme] = useState<'light' | 'dark'>(() => window.localStorage.getItem('aegir-theme') === 'light' ? 'light' : 'dark');
@@ -625,6 +647,7 @@ export function ProductApp() {
   const graphViewProps: GraphViewProps = { theme, focusMode, setFocusMode };
   return (
     <div className="flex h-full bg-zinc-950 text-zinc-200">
+      <AbstractionShortcutController enabled={screen === 'explorer' || screen === 'pulls'} />
       {railOpen && !focusMode && <aside className="flex w-[190px] shrink-0 flex-col border-r border-zinc-800">
         <div className="flex h-12 items-center gap-2 border-b border-zinc-800 px-3">
           <div className="flex h-6 w-6 items-center justify-center rounded bg-sky-500/15"><Activity className="h-4 w-4 text-sky-300" /></div>

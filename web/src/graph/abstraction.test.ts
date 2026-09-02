@@ -30,3 +30,11 @@ test('component level falls back to package without inventing components', () =>
   assert.equal(graph.canonicalToRepresentative.get('a1'), 'pkg-a');
   assert.equal(graph.index.nodeById.has('component:a'), false);
 });
+
+test('keeps a canonical focal identity mappable across shortcut levels', () => {
+  const index = createGraphIndex(nodes, edges, evidence);
+  assert.equal(abstractGraph(index, 'service').canonicalToRepresentative.get('a1'), 'svc-a');
+  assert.equal(abstractGraph(index, 'component').canonicalToRepresentative.get('a1'), 'pkg-a');
+  assert.equal(abstractGraph(index, 'package').canonicalToRepresentative.get('a1'), 'pkg-a');
+  assert.equal(abstractGraph(index, 'symbol').canonicalToRepresentative.get('a1'), 'a1');
+});

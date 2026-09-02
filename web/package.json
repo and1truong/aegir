@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/lib/graphProjection.test.ts src/investigation/reducer.test.ts src/graph/index.test.ts src/graph/evidence.test.ts src/graph/projection/engine.test.ts src/graph/projection/relevance.test.ts src/graph/projection/grouping.test.ts src/layout/layout.test.ts",
+    "test": "node --test src/lib/graphProjection.test.ts src/investigation/reducer.test.ts src/graph/index.test.ts src/graph/evidence.test.ts src/graph/projection/engine.test.ts src/graph/projection/relevance.test.ts src/graph/projection/grouping.test.ts src/layout/layout.test.ts src/review/delta.test.ts",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },

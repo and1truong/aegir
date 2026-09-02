@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Loader2, Maximize2, Minimize2, Moon, Network, PanelLeftClose, PanelLeftOpen,
   PanelRightClose, PanelRightOpen, Plus, RefreshCw, Search, Settings, ShieldAlert, Sun,
 } from 'lucide-react';
-import type { EdgeKind, EvidenceRecord, SysEdge, SysNode } from '../data/types';
+import type { EdgeKind, EvidenceRecord, GraphDelta, GraphEdgeDelta, GraphNodeDelta, SysEdge, SysNode } from '../data/types';
 import { SystemGraph, type GraphDecor } from '../components/graph/SystemGraph';
 import { Badge, Btn, KindIcon, SeverityBadge } from './ui';
 import { cn } from '../utils/cn';
@@ -16,6 +16,7 @@ import { enabledRelationships as deriveEnabledRelationships, legacyBranchExpansi
 import { createGraphIndex } from '../graph/index';
 import { evidenceForEdge, formatEvidenceLocation } from '../graph/evidence';
 import { projectionDefinitions, questionProjectionIds, signalProjectionIds } from '../graph/projection/definitions';
+import { adaptGraphDelta, deltaStatusMaps, graphForReviewPolicy, type ReviewGraphPolicy } from '../review/delta';
 
 type Screen = 'overview' | 'explorer' | 'pulls' | 'rules' | 'search' | 'settings';
 type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint' | 'what-can-break' | 'hot-path' | 'state-mutation' | 'retry-paths' | 'transaction-boundaries' | 'cross-team-dependencies' | 'what-changed-architecturally';
@@ -27,6 +28,7 @@ interface ContractDiff {
 }
 
 interface LocalReview {
+  payloadVersion?: number;
   id: string;
   baseRef: string;
   headRef: string;
@@ -38,6 +40,7 @@ interface LocalReview {
   newViolations: { id: string; ruleId: string; title: string; detail: string }[];
   resolvedViolations: { id: string; ruleId: string; title: string; detail: string }[];
   contractDiff: ContractDiff;
+  delta?: GraphDelta;
 }
 
 const NAV: [Screen, string, ComponentType<{ className?: string }>][] = [
@@ -346,6 +349,10 @@ function SettingsScreen() {
   return <div className="h-full overflow-y-auto p-5"><h1 className="text-[16px] font-semibold">Repositories</h1><div className="mt-4 max-w-[800px] rounded-md border border-zinc-800">{repositories.map((repository) => <button key={repository.id} onClick={() => selectRepository(repository.id)} className={cn('flex w-full items-center gap-3 border-b border-zinc-800 px-3 py-3 text-left last:border-0', active?.id === repository.id && 'bg-sky-500/5')}><Database className="h-4 w-4 text-zinc-500" /><div><div className="text-[12px] text-zinc-200">{repository.name}</div><div className="font-mono text-[10px] text-zinc-600">{repository.path}</div></div><Badge className="ml-auto" tone={repository.status === 'ready' ? 'green' : repository.status === 'error' ? 'red' : 'neutral'}>{repository.status}</Badge></button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (path.trim()) void addRepository(path.trim()).then(() => setPath('')) }} className="mt-4 flex max-w-[800px] gap-2"><input value={path} onChange={(event) => setPath(event.target.value)} placeholder="Add another local Git repository" className="h-8 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 font-mono text-[11px] outline-none" /><Btn variant="solid" disabled={loading || !path.trim()}><Plus className="h-3.5 w-3.5" /> Add and index</Btn></form><div className="mt-8 max-w-[800px]"><h2 className="text-[13px] font-semibold">Measured Go coverage</h2><p className="mt-1 text-[10.5px] text-zinc-500">Provide an absolute path or a repository-relative Go coverprofile. Re-indexing creates a new historical snapshot.</p><form onSubmit={(event) => { event.preventDefault(); if (coveragePath.trim()) void reindex(coveragePath.trim()) }} className="mt-2 flex gap-2"><input value={coveragePath} onChange={(event) => setCoveragePath(event.target.value)} placeholder="coverage.out" className="h-8 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 font-mono text-[11px] outline-none" /><Btn variant="solid" disabled={loading || !coveragePath.trim()}><RefreshCw className="h-3.5 w-3.5" /> Re-index with coverage</Btn></form></div><div className="mt-8 max-w-[800px]"><h2 className="text-[13px] font-semibold">Runtime telemetry</h2><p className="mt-1 text-[10.5px] text-zinc-500">Import a repository-relative or absolute JSON file containing measured metrics, source, and observation window.</p><form onSubmit={(event) => { event.preventDefault(); if (telemetryPath.trim()) void reindex(undefined, telemetryPath.trim()) }} className="mt-2 flex gap-2"><input value={telemetryPath} onChange={(event) => setTelemetryPath(event.target.value)} placeholder="aegir-telemetry.json" className="h-8 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 font-mono text-[11px] outline-none" /><Btn variant="solid" disabled={loading || !telemetryPath.trim()}><Activity className="h-3.5 w-3.5" /> Import and re-index</Btn></form></div></div>;
 }
 
+function DeltaDetails({ entry }: { entry: GraphNodeDelta | GraphEdgeDelta }) {
+  return <div className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone={entry.status === 'added' ? 'green' : entry.status === 'removed' ? 'red' : 'blue'}>{entry.status.toUpperCase()}</Badge><span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Change reasons</span></div>{entry.changeReasons.map((reason, index) => <div key={`${reason.kind}:${index}`} className="mt-2"><div className="font-mono text-[10px] text-zinc-300">{reason.kind}</div><div className="mt-0.5 text-[10px] leading-relaxed text-zinc-500">{reason.detail}</div></div>)}</div>;
+}
+
 function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const { active } = useProduct();
   const { state: investigation, dispatch } = useInvestigation();
@@ -359,7 +366,10 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [baseRef, setBaseRef] = useState('main');
   const [headRef, setHeadRef] = useState('WORKTREE');
   const [review, setReview] = useState<LocalReview>();
-  const reviewIndex = useMemo(() => createGraphIndex(review?.nodes ?? [], review?.edges ?? [], review?.evidence ?? []), [review]);
+  const [reviewPolicy, setReviewPolicy] = useState<ReviewGraphPolicy>('changes-impact');
+  const delta = useMemo(() => review ? adaptGraphDelta(review) : { nodes: [], edges: [] }, [review]);
+  const policyGraph = useMemo(() => review ? graphForReviewPolicy(review, delta, reviewPolicy) : { nodes: [], edges: [] }, [review, delta, reviewPolicy]);
+  const reviewIndex = useMemo(() => createGraphIndex(policyGraph.nodes, policyGraph.edges, review?.evidence ?? []), [policyGraph, review?.evidence]);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -389,17 +399,24 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setLoading(false) }
   };
-  const graph = projectPRGraphIndex(reviewIndex, { projectionId: 'review', activeNodeId: selected, upstreamDepth, downstreamDepth, edgeKinds: enabledRelationships, branchExpansions, nodeBudget: 30 });
+  const graph = projectPRGraphIndex(reviewIndex, { projectionId: 'review', activeNodeId: reviewPolicy === 'blast-radius' ? selected : undefined, upstreamDepth, downstreamDepth, edgeKinds: enabledRelationships, branchExpansions, nodeBudget: 30 });
   const selectedEdgeId = investigation.selectedEntity?.kind === 'edge' ? investigation.selectedEntity.id : undefined;
   const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId);
   const selectedVisibleEdge = graph.visibleGraph.edges.find((edge) => edge.kind === 'real' && edge.id === selectedEdgeId);
+  const selectedNodeDelta = delta.nodes.find((entry) => entry.id === selected);
+  const selectedEdgeDelta = delta.edges.find((entry) => entry.id === selectedEdgeId);
   useEffect(() => {
     if (selectedEdgeId && !selectedEdge) dispatch({ type: 'selectEntity', entity: selected ? { kind: 'node', id: selected } : null });
   }, [selectedEdgeId, selectedEdge, selected, dispatch]);
   if (!review) return <div className="flex h-full items-center justify-center p-6"><div className="w-full max-w-[580px] rounded-lg border border-zinc-800 bg-zinc-900/30 p-5"><GitCompare className="h-6 w-6 text-violet-300" /><h1 className="mt-3 text-[16px] font-semibold">Review local Git changes</h1><p className="mt-1 text-[11px] text-zinc-500">Aegir archives the base ref read-only, compares it with another ref or the current working tree, and persists an evidence-backed graph review.</p><ReviewForm baseRef={baseRef} headRef={headRef} setBaseRef={setBaseRef} setHeadRef={setHeadRef} run={run} loading={loading} /><>{error && <div className="mt-3 text-[11px] text-red-300">{error}</div>}</></div></div>;
-  const decor: GraphDecor = { tone: {}, badges: {}, edgeTone: {}, edgeLabel: {} };
+  const statusMaps = deltaStatusMaps(delta);
+  const decor: GraphDecor = { tone: {}, badges: {}, edgeTone: {}, edgeLabel: {}, dimmed: new Set(), edgeDimmed: new Set() };
   for (const node of review.nodes) if (node.pr) { decor.tone![node.id] = node.pr; decor.badges![node.id] = [{ text: node.pr.toUpperCase(), tone: node.pr === 'added' ? 'green' : node.pr === 'removed' ? 'red' : 'blue' }] }
-  for (const edge of review.edges) if (edge.pr === 'added' || edge.pr === 'removed') { decor.edgeTone![edge.id] = edge.pr; decor.edgeLabel![edge.id] = edge.pr.toUpperCase() }
+  for (const edge of review.edges) if (edge.pr) { decor.edgeTone![edge.id] = edge.pr === 'modified' ? 'highlight' : edge.pr; decor.edgeLabel![edge.id] = edge.pr.toUpperCase() }
+  if (reviewPolicy === 'changes-impact') {
+    for (const node of graph.nodes) if (!statusMaps.nodes.has(node.id)) decor.dimmed!.add(node.id);
+    for (const edge of graph.edges) if (!statusMaps.edges.has(edge.id)) decor.edgeDimmed!.add(edge.id);
+  }
   const selectGraphNode = (id: string) => {
     const aggregate = graph.aggregates.find((item) => item.nodeId === id);
     if (aggregate) {
@@ -415,6 +432,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
         <div className="flex items-start gap-3">
           <GitPullRequest className="mt-0.5 h-5 w-5 text-violet-300" />
           <div><h1 className="text-[14px] font-semibold">{review.baseRef} <span className="text-zinc-600">→</span> {review.headRef}</h1><div className="mt-1 font-mono text-[10px] text-zinc-500">review {review.id} · {new Date(review.createdAt).toLocaleString()}</div></div>
+          <div className="ml-3 flex rounded-md border border-zinc-800 p-0.5">{([['changes-only', 'Changes only'], ['changes-impact', 'Changes + impact'], ['blast-radius', 'Blast radius']] as const).map(([value, label]) => <button key={value} onClick={() => setReviewPolicy(value)} className={cn('rounded px-2 py-1 text-[10px]', reviewPolicy === value ? 'bg-violet-500/15 text-violet-200' : 'text-zinc-500 hover:text-zinc-200')}>{label}</button>)}</div>
           <div className="ml-auto flex items-center gap-1">
             <button onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? 'Hide review sidebar' : 'Show review sidebar'} title={inspectorOpen ? 'Hide review sidebar' : 'Show review sidebar'} className="rounded p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">{inspectorOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}</button>
             <button onClick={() => setFocusMode(true)} aria-label="Enter focus mode" title="Focus mode" className="rounded p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><Maximize2 className="h-3.5 w-3.5" /></button>
@@ -427,7 +445,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
       {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS.impact} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, review.nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}
       <div className={cn('grid min-h-0 flex-1', !focusMode && inspectorOpen ? 'grid-cols-[1fr_360px]' : 'grid-cols-1')}>
         <div className="relative min-w-0"><SystemGraph nodes={graph.nodes} edges={graph.edges} frontiers={graph.aggregates} decor={decor} selected={selected} selectedEdge={selectedEdgeId} onSelect={selectGraphNode} onEdgeSelect={(id) => dispatch({ type: 'selectEntity', entity: { kind: 'edge', id } })} onDoubleClick={selectGraphNode} anchorNodeId={selected ?? graph.visibleGraph.rootNodeIds[0]} topologyRevision={graph.visibleGraph.revision} layoutStrategy="review-LR" minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</div>
-        {!focusMode && inspectorOpen && <aside className="overflow-y-auto border-l border-zinc-800">{selectedEdge ? <div className="p-3"><EdgeInspector edge={selectedEdge} nodes={review.nodes} evidence={evidenceForEdge(reviewIndex, selectedEdge)} reason={selectedVisibleEdge?.reason.detail} onSelectNode={(id) => dispatch({ type: 'setFocalNode', nodeId: id })} /></div> : <><div className="border-b border-zinc-800 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Review findings</div>{review.newViolations.map((violation) => <div key={violation.id} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone="red">NEW</Badge><span className="font-mono text-[10px] text-zinc-500">{violation.ruleId}</span></div><div className="mt-1 text-[11px] text-zinc-200">{violation.title}</div><div className="mt-1 text-[10px] text-zinc-500">{violation.detail}</div></div>)}{review.contractDiff.changes.map((change) => <div key={change.contractId} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone={change.compatibility === 'break' ? 'red' : change.compatibility === 'potential' ? 'orange' : 'green'}>{change.compatibility.toUpperCase()}</Badge><span className="text-[11px] text-zinc-200">{change.name}</span></div><div className="mt-1 text-[10px] text-zinc-500">{change.fields.length} semantic field changes</div></div>)}{review.newViolations.length === 0 && review.contractDiff.changes.length === 0 && <div className="p-4 text-[11px] text-zinc-500">No new deterministic findings or contract changes.</div>}</>}</aside>}
+        {!focusMode && inspectorOpen && <aside className="overflow-y-auto border-l border-zinc-800">{selectedEdge ? <>{selectedEdgeDelta && <DeltaDetails entry={selectedEdgeDelta} />}<div className="p-3"><EdgeInspector edge={selectedEdge} nodes={policyGraph.nodes} evidence={evidenceForEdge(reviewIndex, selectedEdge)} reason={selectedVisibleEdge?.reason.detail} onSelectNode={(id) => dispatch({ type: 'setFocalNode', nodeId: id })} /></div></> : selectedNodeDelta ? <DeltaDetails entry={selectedNodeDelta} /> : <><div className="border-b border-zinc-800 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Review findings</div>{review.newViolations.map((violation) => <div key={violation.id} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone="red">NEW</Badge><span className="font-mono text-[10px] text-zinc-500">{violation.ruleId}</span></div><div className="mt-1 text-[11px] text-zinc-200">{violation.title}</div><div className="mt-1 text-[10px] text-zinc-500">{violation.detail}</div></div>)}{review.contractDiff.changes.map((change) => <div key={change.contractId} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone={change.compatibility === 'break' ? 'red' : change.compatibility === 'potential' ? 'orange' : 'green'}>{change.compatibility.toUpperCase()}</Badge><span className="text-[11px] text-zinc-200">{change.name}</span></div><div className="mt-1 text-[10px] text-zinc-500">{change.fields.length} semantic field changes</div></div>)}{review.newViolations.length === 0 && review.contractDiff.changes.length === 0 && <div className="p-4 text-[11px] text-zinc-500">No new deterministic findings or contract changes.</div>}</>}</aside>}
       </div>
     </div>
   );

@@ -32,6 +32,7 @@ export type EdgeKind =
   | 'retries';
 
 export type PRChange = 'added' | 'removed' | 'modified';
+export type GraphDeltaStatus = 'unchanged' | PRChange;
 
 export type Boundary = 'network' | 'async' | 'persistence' | 'process' | 'transaction';
 
@@ -90,6 +91,33 @@ export interface EvidenceRecord {
   observedAt?: string;
   validUntil?: string;
   metrics?: Record<string, number | string>;
+}
+
+export interface GraphChangeReason {
+  kind: string;
+  detail: string;
+  evidenceRefs?: string[];
+}
+
+export interface GraphNodeDelta {
+  id: string;
+  status: GraphDeltaStatus;
+  before?: SysNode;
+  after?: SysNode;
+  changeReasons: GraphChangeReason[];
+}
+
+export interface GraphEdgeDelta {
+  id: string;
+  status: GraphDeltaStatus;
+  before?: SysEdge;
+  after?: SysEdge;
+  changeReasons: GraphChangeReason[];
+}
+
+export interface GraphDelta {
+  nodes: GraphNodeDelta[];
+  edges: GraphEdgeDelta[];
 }
 
 export interface Team {

@@ -277,6 +277,7 @@ func (s *Store) Review(ctx context.Context, repositoryID, id string) (review.Rev
 	if err := json.Unmarshal([]byte(body), &value); err != nil {
 		return review.Review{}, err
 	}
+	review.UpgradeLegacy(&value)
 	return value, nil
 }
 
@@ -289,6 +290,7 @@ func (s *Store) LatestReview(ctx context.Context, repositoryID string) (review.R
 	if err := json.Unmarshal([]byte(body), &value); err != nil {
 		return review.Review{}, err
 	}
+	review.UpgradeLegacy(&value)
 	return value, nil
 }
 

@@ -33,4 +33,64 @@ func TestCompareMarksEvidenceOnlyEdgeChanges(t *testing.T) {
 	if len(result.Evidence) != 2 {
 		t.Fatalf("expected review evidence records, got %#v", result.Evidence)
 	}
+	if result.PayloadVersion != PayloadVersion || len(result.Delta.Edges) != 1 || result.Delta.Edges[0].Before == nil || result.Delta.Edges[0].After == nil {
+		t.Fatalf("expected a versioned before/after edge delta, got %#v", result.Delta)
+	}
+	if result.Delta.Edges[0].ChangeReasons[0].Kind != "evidence-changed" {
+		t.Fatalf("expected typed evidence reason, got %#v", result.Delta.Edges[0].ChangeReasons)
+	}
+}
+
+func TestComparePreservesRemovedBodiesAndEvidence(t *testing.T) {
+	nodes := []analyzer.Node{{ID: "endpoint", Kind: "endpoint", Label: "POST /orders"}, {ID: "handler", Kind: "function", Label: "CreateOrder"}}
+	edge := analyzer.Edge{ID: "endpoint|calls|handler", Source: "endpoint", Target: "handler", Kind: "calls", EvidenceRefs: []string{"callsite"}}
+	base := analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{edge}, Evidence: []analyzer.EvidenceRecord{{ID: "callsite", Subject: analyzer.EvidenceSubject{Kind: "edge", ID: edge.ID}, Location: &analyzer.EvidenceLocation{File: "routes.go", Line: 42}}}}
+	head := analyzer.Snapshot{Nodes: nodes[:1]}
+	result := Compare("repo", "base", "head", 1, 2, base, head)
+	if len(result.Delta.Nodes) != 1 || result.Delta.Nodes[0].Before == nil || result.Delta.Nodes[0].Status != "removed" {
+		t.Fatalf("expected removed node body, got %#v", result.Delta.Nodes)
+	}
+	if len(result.Delta.Edges) != 1 || result.Delta.Edges[0].Before == nil || result.Delta.Edges[0].After != nil {
+		t.Fatalf("expected removed edge before body, got %#v", result.Delta.Edges)
+	}
+	if len(result.Evidence) != 1 || result.Evidence[0].Location == nil || result.Evidence[0].Location.Line != 42 {
+		t.Fatalf("expected removed call-site evidence, got %#v", result.Evidence)
+	}
+}
+
+func TestUpgradeLegacyReviewCreatesExplicitCompatibilityDelta(t *testing.T) {
+	legacy := Review{Nodes: []analyzer.Node{{ID: "new", Change: "added"}, {ID: "same"}}, Edges: []analyzer.Edge{{ID: "old", Change: "removed"}}}
+	UpgradeLegacy(&legacy)
+	if legacy.PayloadVersion != PayloadVersion || len(legacy.Delta.Nodes) != 1 || len(legacy.Delta.Edges) != 1 {
+		t.Fatalf("legacy review was not upgraded: %#v", legacy)
+	}
+	if legacy.Delta.Nodes[0].ChangeReasons[0].Kind != "legacy-change" {
+		t.Fatalf("expected explicit compatibility reason: %#v", legacy.Delta.Nodes[0])
+	}
+}
+
+func TestCompareModelsFindingContractAndRuntimeReasons(t *testing.T) {
+	node := analyzer.Node{ID: "handler", Kind: "function", Label: "Handler", Meta: map[string]any{"fingerprint": "same"}}
+	base := analyzer.Snapshot{Nodes: []analyzer.Node{node}, Analysis: analyzer.Analysis{
+		Contracts: []analyzer.Contract{{ID: "contract", Name: "Orders", Node: node.ID, Fingerprint: "old", Shape: map[string]string{"required:id": "string"}}},
+		Telemetry: []analyzer.Telemetry{{NodeID: node.ID, RPM: 10, Window: "5m", Source: "test"}},
+	}}
+	head := analyzer.Snapshot{Nodes: []analyzer.Node{node}, Analysis: analyzer.Analysis{
+		Contracts:  []analyzer.Contract{{ID: "contract", Name: "Orders", Node: node.ID, Fingerprint: "new", Shape: map[string]string{"required:id": "number"}}},
+		Telemetry:  []analyzer.Telemetry{{NodeID: node.ID, RPM: 20, Window: "5m", Source: "test"}},
+		Violations: []analyzer.Violation{{ID: "violation", PrimaryNode: node.ID, Title: "New boundary violation"}},
+	}}
+	result := Compare("repo", "base", "head", 1, 2, base, head)
+	if len(result.Delta.Nodes) != 1 || result.Delta.Nodes[0].Status != "modified" {
+		t.Fatalf("expected analysis-only node delta, got %#v", result.Delta.Nodes)
+	}
+	kinds := map[string]bool{}
+	for _, reason := range result.Delta.Nodes[0].ChangeReasons {
+		kinds[reason.Kind] = true
+	}
+	for _, expected := range []string{"architecture-violation", "contract-changed", "runtime-changed"} {
+		if !kinds[expected] {
+			t.Fatalf("missing %s reason in %#v", expected, result.Delta.Nodes[0].ChangeReasons)
+		}
+	}
 }

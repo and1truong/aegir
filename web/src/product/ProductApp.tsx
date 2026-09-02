@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
   Activity, AlertTriangle, ArrowRight, Database, FileCode2, GitBranch, GitCompare, GitPullRequest,
   LayoutDashboard, Loader2, Maximize2, Minimize2, Moon, Network, PanelLeftClose, PanelLeftOpen,
@@ -483,8 +483,8 @@ function DeltaDetails({ entry }: { entry: GraphNodeDelta | GraphEdgeDelta }) {
   return <div className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone={entry.status === 'added' ? 'green' : entry.status === 'removed' ? 'red' : 'blue'}>{entry.status.toUpperCase()}</Badge><span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Change reasons</span></div>{entry.changeReasons.map((reason, index) => <div key={`${reason.kind}:${index}`} className="mt-2"><div className="font-mono text-[10px] text-zinc-300">{reason.kind}</div><div className="mt-0.5 text-[10px] leading-relaxed text-zinc-500">{reason.detail}</div></div>)}</div>;
 }
 
-function ArchitectureEvolutionBar({ changes, loading, open }: { changes: ArchitectureEvolutionChange[]; loading: boolean; open: (change: ArchitectureEvolutionChange) => void }) {
-  return <div className="flex min-h-9 items-center gap-2 overflow-x-auto border-b border-zinc-800 bg-fuchsia-950/10 px-3 py-1"><span className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-fuchsia-400">Architecture evolution</span>{loading ? <span className="text-[9.5px] text-zinc-500">Comparing canonical snapshots…</span> : changes.length ? changes.slice(0, 5).map((change) => <button key={change.id} onClick={() => open(change)} title={change.question} className="shrink-0 rounded border border-fuchsia-900/60 px-2 py-1 text-[9px] text-fuchsia-200">{change.title}</button>) : <span className="text-[9.5px] text-zinc-500">No actionable structural changes in this review scope.</span>}</div>;
+function ArchitectureEvolutionBar({ changes, loading, unavailable, open }: { changes: ArchitectureEvolutionChange[]; loading: boolean; unavailable: boolean; open: (change: ArchitectureEvolutionChange) => void }) {
+  return <div className="flex min-h-9 items-center gap-2 overflow-x-auto border-b border-zinc-800 bg-fuchsia-950/10 px-3 py-1"><span className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-fuchsia-400">Architecture evolution</span>{loading ? <span className="text-[9.5px] text-zinc-500">Comparing canonical snapshots…</span> : unavailable ? <span className="text-[9.5px] text-zinc-500">Comparison unavailable until both snapshots load.</span> : changes.length ? changes.slice(0, 5).map((change) => <button key={change.id} onClick={() => open(change)} title={change.question} className="shrink-0 rounded border border-fuchsia-900/60 px-2 py-1 text-[9px] text-fuchsia-200">{change.title}</button>) : <span className="text-[9.5px] text-zinc-500">No actionable structural changes in this review scope.</span>}</div>;
 }
 
 function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
@@ -501,6 +501,8 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [headRef, setHeadRef] = useState('WORKTREE');
   const [review, setReview] = useState<LocalReview>();
   const [reviewSnapshots, setReviewSnapshots] = useState<{ base?: ProductSnapshot; head?: ProductSnapshot }>({});
+  const [reviewSnapshotErrors, setReviewSnapshotErrors] = useState<{ base?: string; head?: string }>({});
+  const reviewSnapshotRequests = useRef({ base: 0, head: 0 });
   const [reviewPolicy, setReviewPolicy] = useState<ReviewGraphPolicy>('changes-impact');
   const [reviewSnapshotSide, setReviewSnapshotSide] = useState<'base' | 'delta' | 'head'>('delta');
   const [edgePrototypeStage, setEdgePrototypeStage] = useState<EdgePrototypeStage>(1);
@@ -517,16 +519,29 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const reviewIndex = reviewAbstractionGraph.index;
   const reviewProjectedSelected = selected ? reviewAbstractionGraph.canonicalToRepresentative.get(selected) : undefined;
   const reviewProjectedPins = useMemo(() => [...new Set(investigation.pinnedNodeIds.flatMap((id) => reviewAbstractionGraph.canonicalToRepresentative.get(id) ?? []))], [investigation.pinnedNodeIds, reviewAbstractionGraph]);
+  const loadReviewSnapshot = useCallback(async (side: 'base' | 'head') => {
+    const repositoryID = active?.id;
+    const snapshotID = side === 'base' ? review?.baseSnapshotId : review?.headSnapshotId;
+    if (!repositoryID || !snapshotID) return;
+    const request = ++reviewSnapshotRequests.current[side];
+    setReviewSnapshotErrors((current) => ({ ...current, [side]: undefined }));
+    try {
+      const response = await fetch(`/api/repositories/${repositoryID}/graph?snapshot=${snapshotID}`);
+      if (!response.ok) throw new Error(`${side === 'base' ? 'Base' : 'Head'} snapshot unavailable.`);
+      const snapshot = await response.json() as ProductSnapshot;
+      if (request === reviewSnapshotRequests.current[side]) setReviewSnapshots((current) => ({ ...current, [side]: snapshot }));
+    } catch (cause) {
+      if (request === reviewSnapshotRequests.current[side]) setReviewSnapshotErrors((current) => ({ ...current, [side]: cause instanceof Error ? cause.message : String(cause) }));
+    }
+  }, [active?.id, review?.baseSnapshotId, review?.headSnapshotId]);
   useEffect(() => {
     setReviewSnapshots({});
+    setReviewSnapshotErrors({});
     if (!active || !review?.baseSnapshotId || !review.headSnapshotId) return;
-    let current = true;
-    Promise.all([
-      fetch(`/api/repositories/${active.id}/graph?snapshot=${review.baseSnapshotId}`).then((response) => response.ok ? response.json() as Promise<ProductSnapshot> : Promise.reject(new Error('Base snapshot unavailable.'))),
-      fetch(`/api/repositories/${active.id}/graph?snapshot=${review.headSnapshotId}`).then((response) => response.ok ? response.json() as Promise<ProductSnapshot> : Promise.reject(new Error('Head snapshot unavailable.'))),
-    ]).then(([base, head]) => { if (current) setReviewSnapshots({ base, head }) }).catch(() => { if (current) setReviewSnapshots({}) });
-    return () => { current = false };
-  }, [active?.id, review?.baseSnapshotId, review?.headSnapshotId]);
+    void loadReviewSnapshot('base');
+    void loadReviewSnapshot('head');
+    return () => { reviewSnapshotRequests.current.base += 1; reviewSnapshotRequests.current.head += 1 };
+  }, [active?.id, review?.baseSnapshotId, review?.headSnapshotId, loadReviewSnapshot]);
   const architectureEvolution = useMemo(() => {
     if (!active || !reviewSnapshots.base || !reviewSnapshots.head) return { version: 1 as const, comparable: false, warnings: [], changes: [] };
     const analytics = (snapshot: ProductSnapshot) => {
@@ -628,9 +643,10 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
         <div className="mt-3 flex gap-5 font-mono text-[10px] text-zinc-400"><span className="text-emerald-300">+{review.summary.addedNodes} nodes</span><span className="text-red-300">−{review.summary.removedNodes} nodes</span><span>{review.summary.modifiedNodes} modified</span><span>{review.summary.addedEdges} added edges</span><span>{review.summary.modifiedEdges ?? 0} modified edges</span><span>{review.summary.newViolations} new violations</span><span>{review.contractDiff.changes.length} contract changes</span><span>{graph.nodes.length} visible</span></div>
         {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
         {timelineError && <div className="mt-2 flex items-center gap-2 text-[11px] text-amber-300"><span>Review created, but timeline sync failed: {timelineError}</span><button type="button" onClick={() => void syncTimeline()} className="underline">Retry timeline sync</button></div>}
+        {(['base', 'head'] as const).map((side) => reviewSnapshotErrors[side] && <div key={side} className="mt-2 flex items-center gap-2 text-[11px] text-amber-300"><span>{reviewSnapshotErrors[side]}</span><button type="button" onClick={() => void loadReviewSnapshot(side)} className="underline">Retry {side} snapshot</button></div>)}
       </header>}
       {!focusMode && <InvestigationBreadcrumbs nodes={review.nodes} />}
-      {!focusMode && <ArchitectureEvolutionBar changes={architectureEvolution.changes} loading={!reviewSnapshots.base || !reviewSnapshots.head} open={(change) => { setReviewSnapshotSide('delta'); setReviewPolicy('changes-impact'); if (change.edgeIds[0]) dispatch({ type: 'selectEntity', entity: { kind: 'edge', id: change.edgeIds[0] } }); else if (change.nodeIds[0]) dispatch({ type: 'setFocalNode', nodeId: change.nodeIds[0] }) }} />}
+      {!focusMode && <ArchitectureEvolutionBar changes={architectureEvolution.changes} loading={(!reviewSnapshots.base && !reviewSnapshotErrors.base) || (!reviewSnapshots.head && !reviewSnapshotErrors.head)} unavailable={Boolean(reviewSnapshotErrors.base || reviewSnapshotErrors.head)} open={(change) => { setReviewSnapshotSide('delta'); setReviewPolicy('changes-impact'); if (change.edgeIds[0]) dispatch({ type: 'selectEntity', entity: { kind: 'edge', id: change.edgeIds[0] } }); else if (change.nodeIds[0]) dispatch({ type: 'setFocalNode', nodeId: change.nodeIds[0] }) }} />}
       {!focusMode && <EdgePrototypeBar stage={edgePrototypeStage} setStage={setEdgePrototypeStage} />}
       {!focusMode && <PinnedStrip nodeIds={investigation.pinnedNodeIds} nodes={review.nodes} unpin={(nodeId) => dispatch({ type: 'unpinNode', nodeId })} clear={() => dispatch({ type: 'clearPins' })} />}
       {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS.impact} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} evidenceLevel={investigation.evidencePolicy.maximumLevel} includeStale={investigation.evidencePolicy.includeStale} setEvidenceLevel={(maximumLevel) => dispatch({ type: 'setEvidencePolicy', maximumLevel })} setIncludeStale={(includeStale) => dispatch({ type: 'setEvidencePolicy', includeStale })} abstraction={investigation.abstraction} setAbstraction={(abstraction) => dispatch({ type: 'setAbstraction', abstraction })} expandedBranches={expandedBranchLabels(branchExpansions, review.nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}

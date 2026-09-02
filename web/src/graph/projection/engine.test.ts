@@ -136,6 +136,18 @@ test('collapsed groups still enqueue members visible from the opposite direction
   assert.deepEqual(realIds(graph), ['root', 'c', 'b']);
 });
 
+test('collapsed child groups still enqueue members visible from the opposite direction', () => {
+  const grouped = ['b', ...Array.from({ length: 8 }, (_, index) => `s${index}`)].map((id, index) => ({ ...node(id), service: 'shared', pkg: index < 5 ? 'first' : 'second' }));
+  const nodes = [node('root'), node('c'), ...grouped];
+  const edges = [edge('b', 'root'), edge('root', 'b'), edge('b', 'c'), ...grouped.slice(1).map((item) => edge('root', item.id))];
+  const index = createGraphIndex(nodes, edges);
+  const collapsed = projectVisibleGraph(index, projectionDefinition('dependencies'), { activeNodeId: 'root', upstreamDepth: 1, downstreamDepth: 2, branchLimit: 4, nodeBudget: 3 });
+  const serviceGroup = collapsed.nodes.find((item) => item.kind === 'frontier' && item.frontier.value === 'shared');
+  assert.equal(serviceGroup?.kind, 'frontier');
+  const graph = projectVisibleGraph(index, projectionDefinition('dependencies'), { activeNodeId: 'root', upstreamDepth: 1, downstreamDepth: 2, branchLimit: 4, nodeBudget: 3, frontierExpansions: { [serviceGroup!.id]: 1 } });
+  assert.deepEqual(realIds(graph), ['root', 'c', 'b']);
+});
+
 test('locked paths reserve ordered entities and expose stale segments', () => {
   const nodes = [node('root'), node('middle'), node('target'), node('noise')];
   const edges = [edge('root', 'middle'), edge('middle', 'target'), edge('root', 'noise')];

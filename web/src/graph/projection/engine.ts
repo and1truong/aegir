@@ -204,7 +204,10 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
               for (const child of children) {
                 const childMembers = members.filter((candidate) => child.memberNodeIds.includes(candidate.node.id));
                 if (expansions[child.id]) selected.push(...childMembers);
-                else frontiers.set(child.id, child);
+                else {
+                  selected.push(...childMembers.filter((candidate) => visible.has(candidate.node.id) && eligibleIds.has(candidate.node.id)));
+                  frontiers.set(child.id, child);
+                }
               }
             } else {
               selected.push(...members);

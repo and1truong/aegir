@@ -499,6 +499,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [reviewPolicy, setReviewPolicy] = useState<ReviewGraphPolicy>('changes-impact');
   const [reviewSnapshotSide, setReviewSnapshotSide] = useState<'base' | 'delta' | 'head'>('delta');
   const [edgePrototypeStage, setEdgePrototypeStage] = useState<EdgePrototypeStage>(1);
+  const [timelineError, setTimelineError] = useState<string>();
   const delta = useMemo(() => review ? adaptGraphDelta(review) : { nodes: [], edges: [] }, [review]);
   const policyGraph = useMemo(() => review ? reviewSnapshotSide === 'delta' ? graphForReviewPolicy(review, delta, reviewPolicy) : graphForReviewSnapshot(review, delta, reviewSnapshotSide, reviewSnapshots[reviewSnapshotSide]) : { nodes: [], edges: [] }, [review, delta, reviewPolicy, reviewSnapshotSide, reviewSnapshots]);
   const canonicalReviewIndex = useMemo(() => createGraphIndex(policyGraph.nodes, policyGraph.edges, review?.evidence ?? []), [policyGraph, review?.evidence]);
@@ -528,6 +529,11 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const syncTimeline = async () => {
+    setTimelineError(undefined);
+    try { await refreshTimeline() }
+    catch (cause) { setTimelineError(cause instanceof Error ? cause.message : String(cause)) }
+  };
   useEffect(() => {
     setReview(undefined);
     if (!active) return;
@@ -548,14 +554,15 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? 'Review failed');
       setReview(body);
-      await refreshTimeline();
       dispatch({ type: 'setProjection', projectionId: 'impact' });
       dispatch({ type: 'setFocalNode', nodeId: undefined });
       dispatch({ type: 'clearRelationshipOverrides' });
+      await syncTimeline();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setLoading(false) }
   };
-  const graph = projectPRGraphIndex(reviewIndex, { projectionId: 'review', activeNodeId: reviewPolicy === 'blast-radius' ? reviewProjectedSelected : undefined, upstreamDepth, downstreamDepth, edgeKinds: enabledRelationships, branchExpansions, nodeBudget: 30, evidencePolicy: investigation.evidencePolicy, pinnedNodeIds: reviewProjectedPins });
+  const archivedRoots = reviewSnapshotSide === 'delta' ? undefined : [...new Set([...delta.nodes.map((entry) => entry.id), ...delta.edges.flatMap((entry) => [entry.before ?? entry.after].flatMap((edge) => edge ? [edge.source, edge.target] : []))].flatMap((id) => reviewAbstractionGraph.canonicalToRepresentative.get(id) ?? []))];
+  const graph = projectPRGraphIndex(reviewIndex, { projectionId: 'review', activeNodeId: reviewPolicy === 'blast-radius' ? reviewProjectedSelected : undefined, rootNodeIds: archivedRoots, upstreamDepth, downstreamDepth, edgeKinds: enabledRelationships, branchExpansions, nodeBudget: 30, evidencePolicy: investigation.evidencePolicy, pinnedNodeIds: reviewProjectedPins });
   const selectedEdgeId = investigation.selectedEntity?.kind === 'edge' ? investigation.selectedEntity.id : undefined;
   const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId);
   const selectedVisibleEdge = graph.visibleGraph.edges.find((edge) => edge.kind === 'real' && edge.id === selectedEdgeId);
@@ -610,6 +617,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
         </div>
         <div className="mt-3 flex gap-5 font-mono text-[10px] text-zinc-400"><span className="text-emerald-300">+{review.summary.addedNodes} nodes</span><span className="text-red-300">−{review.summary.removedNodes} nodes</span><span>{review.summary.modifiedNodes} modified</span><span>{review.summary.addedEdges} added edges</span><span>{review.summary.modifiedEdges ?? 0} modified edges</span><span>{review.summary.newViolations} new violations</span><span>{review.contractDiff.changes.length} contract changes</span><span>{graph.nodes.length} visible</span></div>
         {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
+        {timelineError && <div className="mt-2 flex items-center gap-2 text-[11px] text-amber-300"><span>Review created, but timeline sync failed: {timelineError}</span><button type="button" onClick={() => void syncTimeline()} className="underline">Retry timeline sync</button></div>}
       </header>}
       {!focusMode && <InvestigationBreadcrumbs nodes={review.nodes} />}
       {!focusMode && <ArchitectureEvolutionBar changes={architectureEvolution.changes} loading={!reviewSnapshots.base || !reviewSnapshots.head} open={(change) => { setReviewSnapshotSide('delta'); setReviewPolicy('changes-impact'); if (change.edgeIds[0]) dispatch({ type: 'selectEntity', entity: { kind: 'edge', id: change.edgeIds[0] } }); else if (change.nodeIds[0]) dispatch({ type: 'setFocalNode', nodeId: change.nodeIds[0] }) }} />}

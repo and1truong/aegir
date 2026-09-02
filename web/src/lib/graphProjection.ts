@@ -101,12 +101,12 @@ export function projectGraphIndex(index: GraphIndex, options: GraphProjectionOpt
   }));
 }
 
-export function projectPRGraph(nodes: SysNode[], edges: SysEdge[], options: Omit<GraphProjectionOptions, 'rootNodeIds'> = {}) {
+export function projectPRGraph(nodes: SysNode[], edges: SysEdge[], options: GraphProjectionOptions = {}) {
   return projectPRGraphIndex(createGraphIndex(nodes, edges), options);
 }
 
-export function projectPRGraphIndex(index: GraphIndex, options: Omit<GraphProjectionOptions, 'rootNodeIds'> = {}) {
+export function projectPRGraphIndex(index: GraphIndex, options: GraphProjectionOptions = {}) {
   const changed = index.nodes.filter((node) => node.pr).map((node) => node.id);
   const changedEdges = index.edges.filter((edge) => edge.pr).flatMap((edge) => [edge.source, edge.target]);
-  return projectGraphIndex(index, { ...options, projectionId: options.projectionId ?? 'review', rootNodeIds: [...changed, ...changedEdges] });
+  return projectGraphIndex(index, { ...options, projectionId: options.projectionId ?? 'review', rootNodeIds: [...(options.rootNodeIds ?? []), ...changed, ...changedEdges] });
 }

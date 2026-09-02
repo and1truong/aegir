@@ -164,7 +164,10 @@ CREATE INDEX IF NOT EXISTS idx_reviews_repository ON reviews(repository_id, crea
 			return err
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE snapshots SET is_current=1 WHERE id IN (SELECT MAX(id) FROM snapshots GROUP BY repository_id) AND NOT EXISTS (SELECT 1 FROM snapshots current WHERE current.repository_id=snapshots.repository_id AND current.is_current=1)`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE snapshots SET snapshot_kind='review',is_current=0 WHERE id IN (SELECT base_snapshot_id FROM reviews UNION SELECT head_snapshot_id FROM reviews)`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE snapshots SET is_current=1 WHERE id IN (SELECT MAX(id) FROM snapshots WHERE snapshot_kind='index' GROUP BY repository_id) AND NOT EXISTS (SELECT 1 FROM snapshots current WHERE current.repository_id=snapshots.repository_id AND current.is_current=1 AND current.snapshot_kind='index')`); err != nil {
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_snapshots_current ON snapshots(repository_id,is_current,id DESC)`)

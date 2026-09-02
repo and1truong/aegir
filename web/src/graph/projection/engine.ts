@@ -149,13 +149,14 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
         const neighborId = direction === 'downstream'
           ? (endpoints.source === current.id ? endpoints.target : undefined)
           : (endpoints.target === current.id ? endpoints.source : undefined);
-        if (!neighborId || neighborId === current.id || visible.has(neighborId)) continue;
+        if (!neighborId || neighborId === current.id) continue;
         const node = index.nodeById.get(neighborId);
         if (!node) continue;
+        const nextDepth = current.depth + semanticCost(edge, index, definition);
+        if ((best.get(neighborId) ?? Number.POSITIVE_INFINITY) <= nextDepth) continue;
         candidateIds.add(neighborId);
         const key = category(edge, direction);
         const group = grouped.get(key) ?? [];
-        const nextDepth = current.depth + semanticCost(edge, index, definition);
         const relevance = { node, edge, fromNodeId: current.id, semanticDepth: nextDepth };
         group.push({ ...relevance, nextDepth, score: scoreCandidate(index, definition, relevance) });
         grouped.set(key, group);

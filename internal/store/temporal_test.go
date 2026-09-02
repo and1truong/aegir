@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/and1truong/aegir/internal/analyzer"
@@ -57,6 +59,52 @@ func TestHistoricalSnapshotsDoNotReplaceCurrentGraph(t *testing.T) {
 	}
 	if got.ID != current.ID || got.ID == historical.ID || got.Ref.Kind != "index" || got.Ref.Version != SnapshotRefVersion {
 		t.Fatalf("unexpected current snapshot: %#v", got.Ref)
+	}
+}
+
+func TestMigrationClassifiesLegacyReviewSnapshotsBeforeRecoveringCurrent(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+CREATE TABLE repositories (id TEXT PRIMARY KEY,name TEXT NOT NULL,path TEXT NOT NULL UNIQUE,module TEXT NOT NULL DEFAULT '',head TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'registered',last_indexed_at TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '');
+CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT,repository_id TEXT NOT NULL REFERENCES repositories(id),created_at TEXT NOT NULL,head TEXT NOT NULL DEFAULT '',stats_json TEXT NOT NULL);
+CREATE TABLE reviews (id TEXT PRIMARY KEY,repository_id TEXT NOT NULL REFERENCES repositories(id),created_at TEXT NOT NULL,base_snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),head_snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),body_json TEXT NOT NULL);
+INSERT INTO repositories(id,name,path,status) VALUES('repo','repo','/repo','ready');
+INSERT INTO snapshots(id,repository_id,created_at,head,stats_json) VALUES(1,'repo','2026-01-01T00:00:00Z','index','{}'),(2,'repo','2026-01-02T00:00:00Z','base','{}'),(3,'repo','2026-01-03T00:00:00Z','head','{}');
+INSERT INTO reviews(id,repository_id,created_at,base_snapshot_id,head_snapshot_id,body_json) VALUES('review','repo','2026-01-03T00:00:00Z',2,3,'{}');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	value, err := Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer value.Close()
+	rows, err := value.db.Query(`SELECT id,snapshot_kind,is_current FROM snapshots ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := []string{}
+	for rows.Next() {
+		var id, current int
+		var kind string
+		if err := rows.Scan(&id, &kind, &current); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%d:%s:%d", id, kind, current))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "1:index:1,2:review:0,3:review:0" {
+		t.Fatalf("unexpected migrated snapshots: %v", got)
 	}
 }
 

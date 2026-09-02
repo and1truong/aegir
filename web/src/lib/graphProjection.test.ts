@@ -93,3 +93,15 @@ test('PR projection starts from changed nodes and excludes unrelated nodes', () 
   const projection = projectPRGraph(nodes, [edge('changed', 'impact')], { upstreamDepth: 1, downstreamDepth: 1 });
   assert.deepEqual(ids(projection), ['changed', 'impact']);
 });
+
+test('PR projection accepts explicit roots when archived nodes have no change markers', () => {
+  const nodes = [node('changed'), node('impact'), node('unrelated')];
+  const projection = projectPRGraph(nodes, [edge('changed', 'impact')], { rootNodeIds: ['changed'], upstreamDepth: 1, downstreamDepth: 1 });
+  assert.deepEqual(ids(projection), ['changed', 'impact']);
+});
+
+test('traverses a shared neighbor independently in both directions', () => {
+  const nodes = [node('root'), node('shared'), node('downstream')];
+  const projection = projectGraph(nodes, [edge('shared', 'root'), edge('root', 'shared'), edge('shared', 'downstream')], { activeNodeId: 'root', upstreamDepth: 1, downstreamDepth: 2 });
+  assert.deepEqual(ids(projection), ['root', 'shared', 'downstream']);
+});

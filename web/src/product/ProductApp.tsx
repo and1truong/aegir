@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import {
   Activity, AlertTriangle, ArrowRight, Database, FileCode2, GitBranch, GitCompare, GitPullRequest,
-  LayoutDashboard, Loader2, Moon, Network, Plus, RefreshCw, Search, Settings, ShieldAlert, Sun,
+  LayoutDashboard, Loader2, Maximize2, Minimize2, Moon, Network, PanelLeftClose, PanelLeftOpen,
+  PanelRightClose, PanelRightOpen, Plus, RefreshCw, Search, Settings, ShieldAlert, Sun,
 } from 'lucide-react';
 import type { EdgeKind, SysEdge, SysNode } from '../data/types';
 import { SystemGraph, type GraphDecor } from '../components/graph/SystemGraph';
@@ -96,7 +97,14 @@ function expandedBranchLabels(expansions: BranchExpansions, nodes: SysNode[]): E
   });
 }
 
-function Explorer({ theme }: { theme: 'light' | 'dark' }) {
+interface GraphViewProps {
+  theme: 'light' | 'dark';
+  focusMode: boolean;
+  setFocusMode: (value: boolean) => void;
+  railOpen: boolean;
+}
+
+function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) {
   const { active, snapshot } = useProduct();
   const [mode, setMode] = useState<ExplorerMode>('dependencies');
   const [selected, setSelected] = useState<string>();
@@ -105,6 +113,7 @@ function Explorer({ theme }: { theme: 'light' | 'dark' }) {
   const [downstreamDepth, setDownstreamDepth] = useState<ProjectionDepth>(2);
   const [enabledRelationships, setEnabledRelationships] = useState<Set<EdgeKind>>(() => new Set(MODE_RELATIONSHIPS.dependencies));
   const [branchExpansions, setBranchExpansions] = useState<BranchExpansions>({});
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   const [impact, setImpact] = useState<{ root?: string; nodes: SysNode[]; edges: SysEdge[]; hops: Record<string, number> }>();
   const [contractDiff, setContractDiff] = useState<ContractDiff>();
   const nodes = snapshot?.nodes ?? [];
@@ -230,20 +239,22 @@ function Explorer({ theme }: { theme: 'light' | 'dark' }) {
   });
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-10 items-center gap-1 border-b border-zinc-800 px-3">
+      {!focusMode && <div className="flex h-10 items-center gap-1 border-b border-zinc-800 px-3">
         {(['dependencies', 'data flow', 'runtime', 'impact', 'coverage', 'complexity', 'contracts', 'lint'] as ExplorerMode[]).map((item) => <button key={item} onClick={() => setMode(item)} className={cn('rounded-md px-2 py-1.5 text-[11px] capitalize', mode === item ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}>{item}</button>)}
         <span className="ml-auto font-mono text-[10px] text-zinc-500">{graph.nodes.length} nodes · {graph.edges.length} edges</span>
-      </div>
-      <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={setUpstreamDepth} setDownstream={setDownstreamDepth} relationships={MODE_RELATIONSHIPS[mode]} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, nodes)} collapseBranch={(key) => setBranchExpansions((current) => { const next = { ...current }; delete next[key]; return next })} />
+        <button onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? 'Hide inspector' : 'Show inspector'} title={inspectorOpen ? 'Hide inspector' : 'Show inspector'} className="ml-1 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">{inspectorOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}</button>
+        <button onClick={() => setFocusMode(true)} aria-label="Enter focus mode" title="Focus mode" className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><Maximize2 className="h-3.5 w-3.5" /></button>
+      </div>}
+      {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={setUpstreamDepth} setDownstream={setDownstreamDepth} relationships={MODE_RELATIONSHIPS[mode]} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, nodes)} collapseBranch={(key) => setBranchExpansions((current) => { const next = { ...current }; delete next[key]; return next })} />}
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[250px] shrink-0 flex-col border-r border-zinc-800">
+        {!focusMode && <aside className="flex w-[250px] shrink-0 flex-col border-r border-zinc-800">
           <div className="border-b border-zinc-800 p-2"><div className="flex h-7 items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950 px-2"><Search className="h-3.5 w-3.5 text-zinc-600" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter symbols…" className="w-full bg-transparent font-mono text-[11px] outline-none" /></div></div>
           <div className="min-h-0 flex-1 overflow-y-auto py-1">{filtered.map((node) => <button key={node.id} onClick={() => setSelected(node.id)} className={cn('flex w-full items-center gap-2 px-2 py-1 text-left', selected === node.id ? 'bg-sky-500/10 text-sky-100' : 'text-zinc-300 hover:bg-zinc-900')}><KindIcon kind={node.kind} /><span className="min-w-0 flex-1 truncate font-mono text-[10.5px]">{node.label}</span></button>)}</div>
-        </aside>
-        <main className="min-w-0 flex-1"><SystemGraph nodes={graph.nodes} edges={graph.edges} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={mode} minimap theme={theme} /></main>
-        <aside className="w-[310px] shrink-0 overflow-y-auto border-l border-zinc-800 p-3">
+        </aside>}
+        <main className="relative min-w-0 flex-1"><SystemGraph nodes={graph.nodes} edges={graph.edges} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={`${mode}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</main>
+        {!focusMode && inspectorOpen && <aside className="w-[310px] shrink-0 overflow-y-auto border-l border-zinc-800 p-3">
           {selectedNode ? <><div className="flex items-center gap-2"><KindIcon kind={selectedNode.kind} /><Badge>{selectedNode.kind}</Badge></div><h2 className="mt-2 break-words font-mono text-[13px] text-zinc-50">{selectedNode.label}</h2><div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{selectedNode.file}</div>{mode === 'coverage' && coverage.get(selectedNode.id) && <div className="mt-4 rounded-md border border-zinc-800 p-2"><div className="font-mono text-[18px] text-zinc-100">{coverage.get(selectedNode.id)?.line ?? '—'}%</div><div className="mt-1 text-[10px] text-zinc-500">{coverage.get(selectedNode.id)?.note}</div></div>}{mode === 'complexity' && complexity.get(selectedNode.id) && <ComplexityInspector item={complexity.get(selectedNode.id)!} />}{mode === 'runtime' && telemetry.get(selectedNode.id) && <RuntimeInspector item={telemetry.get(selectedNode.id)!} />}{mode === 'contracts' ? <ContractInspector diff={contractDiff} contractID={selectedNode.id} /> : <div className="mt-4 border-t border-zinc-800 pt-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationships in scope</div>{graph.edges.filter((edge) => !isAggregateNode(edge.source) && !isAggregateNode(edge.target) && (edge.source === selected || edge.target === selected)).slice(0, 30).map((edge) => { const other = nodes.find((node) => node.id === (edge.source === selected ? edge.target : edge.source)); return <button key={edge.id} onClick={() => other && setSelected(other.id)} className="mt-1 flex w-full items-center gap-2 text-left text-[10.5px] text-zinc-300 hover:text-sky-200"><Badge>{edge.kind}</Badge><span className="truncate font-mono">{other?.label}</span></button> })}</div>}</> : <div className="text-zinc-500">Select a node.</div>}
-        </aside>
+        </aside>}
       </div>
     </div>
   );
@@ -298,7 +309,7 @@ function SettingsScreen() {
   return <div className="h-full overflow-y-auto p-5"><h1 className="text-[16px] font-semibold">Repositories</h1><div className="mt-4 max-w-[800px] rounded-md border border-zinc-800">{repositories.map((repository) => <button key={repository.id} onClick={() => selectRepository(repository.id)} className={cn('flex w-full items-center gap-3 border-b border-zinc-800 px-3 py-3 text-left last:border-0', active?.id === repository.id && 'bg-sky-500/5')}><Database className="h-4 w-4 text-zinc-500" /><div><div className="text-[12px] text-zinc-200">{repository.name}</div><div className="font-mono text-[10px] text-zinc-600">{repository.path}</div></div><Badge className="ml-auto" tone={repository.status === 'ready' ? 'green' : repository.status === 'error' ? 'red' : 'neutral'}>{repository.status}</Badge></button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (path.trim()) void addRepository(path.trim()).then(() => setPath('')) }} className="mt-4 flex max-w-[800px] gap-2"><input value={path} onChange={(event) => setPath(event.target.value)} placeholder="Add another local Git repository" className="h-8 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 font-mono text-[11px] outline-none" /><Btn variant="solid" disabled={loading || !path.trim()}><Plus className="h-3.5 w-3.5" /> Add and index</Btn></form><div className="mt-8 max-w-[800px]"><h2 className="text-[13px] font-semibold">Measured Go coverage</h2><p className="mt-1 text-[10.5px] text-zinc-500">Provide an absolute path or a repository-relative Go coverprofile. Re-indexing creates a new historical snapshot.</p><form onSubmit={(event) => { event.preventDefault(); if (coveragePath.trim()) void reindex(coveragePath.trim()) }} className="mt-2 flex gap-2"><input value={coveragePath} onChange={(event) => setCoveragePath(event.target.value)} placeholder="coverage.out" className="h-8 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 font-mono text-[11px] outline-none" /><Btn variant="solid" disabled={loading || !coveragePath.trim()}><RefreshCw className="h-3.5 w-3.5" /> Re-index with coverage</Btn></form></div><div className="mt-8 max-w-[800px]"><h2 className="text-[13px] font-semibold">Runtime telemetry</h2><p className="mt-1 text-[10.5px] text-zinc-500">Import a repository-relative or absolute JSON file containing measured metrics, source, and observation window.</p><form onSubmit={(event) => { event.preventDefault(); if (telemetryPath.trim()) void reindex(undefined, telemetryPath.trim()) }} className="mt-2 flex gap-2"><input value={telemetryPath} onChange={(event) => setTelemetryPath(event.target.value)} placeholder="aegir-telemetry.json" className="h-8 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 font-mono text-[11px] outline-none" /><Btn variant="solid" disabled={loading || !telemetryPath.trim()}><Activity className="h-3.5 w-3.5" /> Import and re-index</Btn></form></div></div>;
 }
 
-function ReviewScreen({ theme }: { theme: 'light' | 'dark' }) {
+function ReviewScreen({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) {
   const { active } = useProduct();
   const [baseRef, setBaseRef] = useState('main');
   const [headRef, setHeadRef] = useState('WORKTREE');
@@ -308,6 +319,7 @@ function ReviewScreen({ theme }: { theme: 'light' | 'dark' }) {
   const [downstreamDepth, setDownstreamDepth] = useState<ProjectionDepth>(2);
   const [enabledRelationships, setEnabledRelationships] = useState<Set<EdgeKind>>(() => new Set(MODE_RELATIONSHIPS.impact));
   const [branchExpansions, setBranchExpansions] = useState<BranchExpansions>({});
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => {
@@ -345,7 +357,28 @@ function ReviewScreen({ theme }: { theme: 'light' | 'dark' }) {
     setSelected(id);
   };
   const toggleRelationship = (kind: EdgeKind) => setEnabledRelationships((current) => { const next = new Set(current); if (next.has(kind)) next.delete(kind); else next.add(kind); return next });
-  return <div className="flex h-full min-h-0 flex-col"><header className="border-b border-zinc-800 px-4 py-3"><div className="flex items-start gap-3"><GitPullRequest className="mt-0.5 h-5 w-5 text-violet-300" /><div><h1 className="text-[14px] font-semibold">{review.baseRef} <span className="text-zinc-600">→</span> {review.headRef}</h1><div className="mt-1 font-mono text-[10px] text-zinc-500">review {review.id} · {new Date(review.createdAt).toLocaleString()}</div></div><div className="ml-auto"><ReviewForm compact baseRef={baseRef} headRef={headRef} setBaseRef={setBaseRef} setHeadRef={setHeadRef} run={run} loading={loading} /></div></div><div className="mt-3 flex gap-5 font-mono text-[10px] text-zinc-400"><span className="text-emerald-300">+{review.summary.addedNodes} nodes</span><span className="text-red-300">−{review.summary.removedNodes} nodes</span><span>{review.summary.modifiedNodes} modified</span><span>{review.summary.addedEdges} added edges</span><span>{review.summary.newViolations} new violations</span><span>{review.contractDiff.changes.length} contract changes</span><span>{graph.nodes.length} visible</span></div>{error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}</header><GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={setUpstreamDepth} setDownstream={setDownstreamDepth} relationships={MODE_RELATIONSHIPS.impact} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, review.nodes)} collapseBranch={(key) => setBranchExpansions((current) => { const next = { ...current }; delete next[key]; return next })} /><div className="grid min-h-0 flex-1 grid-cols-[1fr_360px]"><div className="min-w-0"><SystemGraph nodes={graph.nodes} edges={graph.edges} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={review.id} minimap theme={theme} /></div><aside className="overflow-y-auto border-l border-zinc-800"><div className="border-b border-zinc-800 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Review findings</div>{review.newViolations.map((violation) => <div key={violation.id} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone="red">NEW</Badge><span className="font-mono text-[10px] text-zinc-500">{violation.ruleId}</span></div><div className="mt-1 text-[11px] text-zinc-200">{violation.title}</div><div className="mt-1 text-[10px] text-zinc-500">{violation.detail}</div></div>)}{review.contractDiff.changes.map((change) => <div key={change.contractId} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone={change.compatibility === 'break' ? 'red' : change.compatibility === 'potential' ? 'orange' : 'green'}>{change.compatibility.toUpperCase()}</Badge><span className="text-[11px] text-zinc-200">{change.name}</span></div><div className="mt-1 text-[10px] text-zinc-500">{change.fields.length} semantic field changes</div></div>)}{review.newViolations.length === 0 && review.contractDiff.changes.length === 0 && <div className="p-4 text-[11px] text-zinc-500">No new deterministic findings or contract changes.</div>}</aside></div></div>;
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {!focusMode && <header className="border-b border-zinc-800 px-4 py-3">
+        <div className="flex items-start gap-3">
+          <GitPullRequest className="mt-0.5 h-5 w-5 text-violet-300" />
+          <div><h1 className="text-[14px] font-semibold">{review.baseRef} <span className="text-zinc-600">→</span> {review.headRef}</h1><div className="mt-1 font-mono text-[10px] text-zinc-500">review {review.id} · {new Date(review.createdAt).toLocaleString()}</div></div>
+          <div className="ml-auto flex items-center gap-1">
+            <button onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? 'Hide review sidebar' : 'Show review sidebar'} title={inspectorOpen ? 'Hide review sidebar' : 'Show review sidebar'} className="rounded p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">{inspectorOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}</button>
+            <button onClick={() => setFocusMode(true)} aria-label="Enter focus mode" title="Focus mode" className="rounded p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><Maximize2 className="h-3.5 w-3.5" /></button>
+            <ReviewForm compact baseRef={baseRef} headRef={headRef} setBaseRef={setBaseRef} setHeadRef={setHeadRef} run={run} loading={loading} />
+          </div>
+        </div>
+        <div className="mt-3 flex gap-5 font-mono text-[10px] text-zinc-400"><span className="text-emerald-300">+{review.summary.addedNodes} nodes</span><span className="text-red-300">−{review.summary.removedNodes} nodes</span><span>{review.summary.modifiedNodes} modified</span><span>{review.summary.addedEdges} added edges</span><span>{review.summary.newViolations} new violations</span><span>{review.contractDiff.changes.length} contract changes</span><span>{graph.nodes.length} visible</span></div>
+        {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
+      </header>}
+      {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={setUpstreamDepth} setDownstream={setDownstreamDepth} relationships={MODE_RELATIONSHIPS.impact} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, review.nodes)} collapseBranch={(key) => setBranchExpansions((current) => { const next = { ...current }; delete next[key]; return next })} />}
+      <div className={cn('grid min-h-0 flex-1', !focusMode && inspectorOpen ? 'grid-cols-[1fr_360px]' : 'grid-cols-1')}>
+        <div className="relative min-w-0"><SystemGraph nodes={graph.nodes} edges={graph.edges} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={`${review.id}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</div>
+        {!focusMode && inspectorOpen && <aside className="overflow-y-auto border-l border-zinc-800"><div className="border-b border-zinc-800 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Review findings</div>{review.newViolations.map((violation) => <div key={violation.id} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone="red">NEW</Badge><span className="font-mono text-[10px] text-zinc-500">{violation.ruleId}</span></div><div className="mt-1 text-[11px] text-zinc-200">{violation.title}</div><div className="mt-1 text-[10px] text-zinc-500">{violation.detail}</div></div>)}{review.contractDiff.changes.map((change) => <div key={change.contractId} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone={change.compatibility === 'break' ? 'red' : change.compatibility === 'potential' ? 'orange' : 'green'}>{change.compatibility.toUpperCase()}</Badge><span className="text-[11px] text-zinc-200">{change.name}</span></div><div className="mt-1 text-[10px] text-zinc-500">{change.fields.length} semantic field changes</div></div>)}{review.newViolations.length === 0 && review.contractDiff.changes.length === 0 && <div className="p-4 text-[11px] text-zinc-500">No new deterministic findings or contract changes.</div>}</aside>}
+      </div>
+    </div>
+  );
 }
 
 function ReviewForm({ baseRef, headRef, setBaseRef, setHeadRef, run, loading, compact = false }: { baseRef: string; headRef: string; setBaseRef: (value: string) => void; setHeadRef: (value: string) => void; run: () => void; loading: boolean; compact?: boolean }) {
@@ -356,6 +389,8 @@ export function ProductApp() {
   const { repositories, active, snapshot, loading, error, selectRepository } = useProduct();
   const [theme, setTheme] = useState<'light' | 'dark'>(() => window.localStorage.getItem('aegir-theme') === 'light' ? 'light' : 'dark');
   const [screen, setScreen] = useState<Screen>('overview');
+  const [railOpen, setRailOpen] = useState(true);
+  const [focusMode, setFocusMode] = useState(false);
   useEffect(() => {
     document.documentElement.classList.toggle('light', theme === 'light');
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -363,5 +398,24 @@ export function ProductApp() {
     window.localStorage.setItem('aegir-theme', theme);
   }, [theme]);
   if (!loading && repositories.length === 0) return <Onboarding />;
-  return <div className="flex h-full bg-zinc-950 text-zinc-200"><aside className="flex w-[190px] shrink-0 flex-col border-r border-zinc-800"><div className="flex h-12 items-center gap-2 border-b border-zinc-800 px-3"><div className="flex h-6 w-6 items-center justify-center rounded bg-sky-500/15"><Activity className="h-4 w-4 text-sky-300" /></div><span className="text-[13px] font-semibold">Aegir</span><Badge className="ml-auto">LOCAL</Badge></div><div className="border-b border-zinc-800 p-2"><select value={active?.id ?? ''} onChange={(event) => selectRepository(event.target.value)} className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]">{repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name}</option>)}</select></div><nav className="p-2">{NAV.map(([id, label, Icon]) => <button key={id} onClick={() => setScreen(id)} className={cn('mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11.5px]', screen === id ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}><Icon className="h-3.5 w-3.5" />{label}</button>)}</nav><div className="mt-auto border-t border-zinc-800 p-2"><button onClick={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-zinc-500 hover:bg-zinc-900">{theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}{theme === 'dark' ? 'Light' : 'Dark'} theme</button></div></aside><div className="min-w-0 flex-1">{loading && !snapshot ? <div className="flex h-full items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-sky-300" /></div> : error ? <div className="p-5 text-red-300">{error}</div> : screen === 'overview' ? <Overview openExplorer={() => setScreen('explorer')} /> : screen === 'explorer' ? <Explorer theme={theme} /> : screen === 'rules' ? <RulesScreen /> : screen === 'search' ? <SearchScreen /> : screen === 'settings' ? <SettingsScreen /> : <ReviewScreen theme={theme} />}</div></div>;
+  const graphViewProps: GraphViewProps = { theme, focusMode, setFocusMode, railOpen };
+  return (
+    <div className="flex h-full bg-zinc-950 text-zinc-200">
+      {railOpen && !focusMode && <aside className="flex w-[190px] shrink-0 flex-col border-r border-zinc-800">
+        <div className="flex h-12 items-center gap-2 border-b border-zinc-800 px-3">
+          <div className="flex h-6 w-6 items-center justify-center rounded bg-sky-500/15"><Activity className="h-4 w-4 text-sky-300" /></div>
+          <span className="text-[13px] font-semibold">Aegir</span>
+          <Badge className="ml-auto">LOCAL</Badge>
+          <button onClick={() => setRailOpen(false)} aria-label="Hide navigation rail" title="Hide navigation rail" className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><PanelLeftClose className="h-3.5 w-3.5" /></button>
+        </div>
+        <div className="border-b border-zinc-800 p-2"><select value={active?.id ?? ''} onChange={(event) => selectRepository(event.target.value)} className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]">{repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name}</option>)}</select></div>
+        <nav className="p-2">{NAV.map(([id, label, Icon]) => <button key={id} onClick={() => setScreen(id)} className={cn('mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11.5px]', screen === id ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}><Icon className="h-3.5 w-3.5" />{label}</button>)}</nav>
+        <div className="mt-auto border-t border-zinc-800 p-2"><button onClick={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-zinc-500 hover:bg-zinc-900">{theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}{theme === 'dark' ? 'Light' : 'Dark'} theme</button></div>
+      </aside>}
+      <div className="relative min-w-0 flex-1">
+        {!railOpen && !focusMode && <button onClick={() => setRailOpen(true)} aria-label="Show navigation rail" title="Show navigation rail" className="absolute bottom-3 left-3 z-50 rounded-md border border-zinc-700 bg-zinc-950/90 p-2 text-zinc-400 shadow-lg hover:bg-zinc-800 hover:text-zinc-100"><PanelLeftOpen className="h-4 w-4" /></button>}
+        {loading && !snapshot ? <div className="flex h-full items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-sky-300" /></div> : error ? <div className="p-5 text-red-300">{error}</div> : screen === 'overview' ? <Overview openExplorer={() => setScreen('explorer')} /> : screen === 'explorer' ? <Explorer {...graphViewProps} /> : screen === 'rules' ? <RulesScreen /> : screen === 'search' ? <SearchScreen /> : screen === 'settings' ? <SettingsScreen /> : <ReviewScreen {...graphViewProps} />}
+      </div>
+    </div>
+  );
 }

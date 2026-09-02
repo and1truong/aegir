@@ -231,12 +231,23 @@ func Compare(repositoryID, baseRef, headRef string, baseID, headID int64, base, 
 		}
 	}
 	usedEvidence := map[string]bool{}
-	for _, edge := range result.Edges {
-		for _, evidenceID := range edge.EvidenceRefs {
+	includeEvidence := func(evidenceRefs []string) {
+		for _, evidenceID := range evidenceRefs {
 			if record, ok := evidenceByID[evidenceID]; ok && !usedEvidence[evidenceID] {
 				result.Evidence = append(result.Evidence, record)
 				usedEvidence[evidenceID] = true
 			}
+		}
+	}
+	for _, edge := range result.Edges {
+		includeEvidence(edge.EvidenceRefs)
+	}
+	for _, edge := range result.Delta.Edges {
+		if edge.Before != nil {
+			includeEvidence(edge.Before.EvidenceRefs)
+		}
+		if edge.After != nil {
+			includeEvidence(edge.After.EvidenceRefs)
 		}
 	}
 	sort.Slice(result.Nodes, func(i, j int) bool { return result.Nodes[i].ID < result.Nodes[j].ID })
@@ -275,6 +286,7 @@ func addNodeDeltaReason(result *Review, baseNodes, headNodes map[string]analyzer
 		afterCopy := after
 		entry.After = &afterCopy
 	}
+	result.Summary.ModifiedNodes++
 	result.Delta.Nodes = append(result.Delta.Nodes, entry)
 }
 

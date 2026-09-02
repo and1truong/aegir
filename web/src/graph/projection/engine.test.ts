@@ -60,6 +60,12 @@ test('reports missing roots and accounts for the hard budget deterministically',
   assert.deepEqual(realIds(missing), realIds(again));
 });
 
+test('changes revision when the visible topology changes', () => {
+  const before = projectVisibleGraph(createGraphIndex([node('root'), node('before')], [edge('root', 'before')]), projectionDefinition('dependencies'), { activeNodeId: 'root', upstreamDepth: 0, downstreamDepth: 1 });
+  const after = projectVisibleGraph(createGraphIndex([node('root'), node('after')], [edge('root', 'after')]), projectionDefinition('dependencies'), { activeNodeId: 'root', upstreamDepth: 0, downstreamDepth: 1 });
+  assert.notEqual(before.revision, after.revision);
+});
+
 test('registers every compatibility projection with declarative policies', () => {
   assert.deepEqual(signalProjectionIds.sort(), ['complexity', 'contracts', 'coverage', 'data flow', 'dependencies', 'impact', 'lint', 'runtime']);
   assert.equal(questionProjectionIds.length, 7);

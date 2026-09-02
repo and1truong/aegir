@@ -23,7 +23,7 @@ func TestCompareMarksEvidenceOnlyEdgeChanges(t *testing.T) {
 	nodes := []analyzer.Node{{ID: "a", Kind: "function", Label: "A"}, {ID: "b", Kind: "function", Label: "B"}}
 	baseEdge := analyzer.Edge{ID: "a|calls|b", Source: "a", Target: "b", Kind: "calls", EvidenceRefs: []string{"old"}}
 	headEdge := baseEdge
-	headEdge.EvidenceRefs = []string{"old", "new"}
+	headEdge.EvidenceRefs = []string{"new"}
 	base := analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{baseEdge}, Evidence: []analyzer.EvidenceRecord{{ID: "old", Subject: analyzer.EvidenceSubject{Kind: "edge", ID: baseEdge.ID}}}}
 	head := analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{headEdge}, Evidence: []analyzer.EvidenceRecord{{ID: "old", Subject: analyzer.EvidenceSubject{Kind: "edge", ID: baseEdge.ID}}, {ID: "new", Subject: analyzer.EvidenceSubject{Kind: "edge", ID: baseEdge.ID}}}}
 	result := Compare("repo", "base", "head", 1, 2, base, head)
@@ -81,6 +81,9 @@ func TestCompareModelsFindingContractAndRuntimeReasons(t *testing.T) {
 		Violations: []analyzer.Violation{{ID: "violation", PrimaryNode: node.ID, Title: "New boundary violation"}},
 	}}
 	result := Compare("repo", "base", "head", 1, 2, base, head)
+	if result.Summary.ModifiedNodes != 1 {
+		t.Fatalf("expected analysis-only modification in summary, got %#v", result.Summary)
+	}
 	if len(result.Delta.Nodes) != 1 || result.Delta.Nodes[0].Status != "modified" {
 		t.Fatalf("expected analysis-only node delta, got %#v", result.Delta.Nodes)
 	}

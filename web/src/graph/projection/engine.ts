@@ -81,7 +81,7 @@ function overview(index: GraphIndex, definition: ProjectionDefinition, edgeKinds
     .filter((edge) => edgeKinds.has(edge.kind) && ids.has(edge.source) && ids.has(edge.target) && eligibleEvidenceIds(index, edge, evidencePolicy).length > 0)
     .map((edge) => ({ kind: 'real', id: edge.id, edge, ...visualEndpoints(edge, definition), canonicalEdgeIds: [edge.id], reason, evidenceIds: eligibleEvidenceIds(index, edge, evidencePolicy) }));
   return {
-    revision: `${definition.id}:overview:${selected.map((node) => node.id).join(',')}`,
+    revision: `${definition.id}:overview:nodes:${selected.map((node) => node.id).sort().join(',')}:edges:${edges.map((edge) => edge.id).sort().join(',')}`,
     projectionId: definition.id,
     nodes,
     edges,
@@ -247,7 +247,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
   });
   const frontierEdges: VisibleEdge[] = visibleFrontiers.map((frontier) => ({ kind: 'frontier-link', id: `frontier-link:${frontier.id}`, source: frontier.direction === 'downstream' ? frontier.parentId : frontier.id, target: frontier.direction === 'downstream' ? frontier.id : frontier.parentId, canonicalEdgeIds: [], reason: { kind: 'frontier', detail: `Connects the ${frontier.category} frontier to its parent.` }, evidenceIds: [] }));
   const pruned = Math.max(0, candidateIds.size - realNodes.length);
-  const revisionParts = [definition.id, roots.join(','), `pins:${[...pinned].sort().join(',')}`, `path:${[...requiredEdges].join(',')}`, request.upstreamDepth ?? definition.defaultDepth.upstream, request.downstreamDepth ?? definition.defaultDepth.downstream, [...edgeKinds].sort().join(','), `${evidencePolicy.maximumLevel}:${evidencePolicy.includeStale}`, Object.entries(expansions).sort().map(([id, pages]) => `${id}=${pages}`).join(',')];
+  const revisionParts = [definition.id, roots.join(','), `pins:${[...pinned].sort().join(',')}`, `path:${[...requiredEdges].join(',')}`, request.upstreamDepth ?? definition.defaultDepth.upstream, request.downstreamDepth ?? definition.defaultDepth.downstream, [...edgeKinds].sort().join(','), `${evidencePolicy.maximumLevel}:${evidencePolicy.includeStale}`, Object.entries(expansions).sort().map(([id, pages]) => `${id}=${pages}`).join(','), `nodes:${[...realNodes, ...frontierNodes].map((node) => node.id).sort().join(',')}`, `edges:${[...realEdges, ...frontierEdges].map((edge) => edge.id).sort().join(',')}`];
   return {
     revision: revisionParts.join('|'),
     projectionId: definition.id,

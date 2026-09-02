@@ -45,6 +45,52 @@ func TestCompareMarksEvidenceOnlyEdgeChanges(t *testing.T) {
 	}
 }
 
+func TestCompareReviewIDIncludesComparedEdgeFields(t *testing.T) {
+	nodes := []analyzer.Node{{ID: "a"}, {ID: "b"}}
+	baseEdge := analyzer.Edge{ID: "edge", Source: "a", Target: "b", Kind: "calls"}
+	base := analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{baseEdge}}
+	boundaryEdge := baseEdge
+	boundaryEdge.Boundary = "external"
+	synchronousEdge := baseEdge
+	synchronousEdge.Synchronous = true
+	unchangedID := Compare("repo", "base", "head", 1, 2, base, base).ID
+	boundaryID := Compare("repo", "base", "head", 1, 2, base, analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{boundaryEdge}}).ID
+	synchronousID := Compare("repo", "base", "head", 1, 2, base, analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{synchronousEdge}}).ID
+	if unchangedID == boundaryID || unchangedID == synchronousID || boundaryID == synchronousID {
+		t.Fatalf("review IDs collapsed distinct edge semantics: unchanged=%s boundary=%s synchronous=%s", unchangedID, boundaryID, synchronousID)
+	}
+}
+
+func TestCompareReviewIDCanonicalizesSnapshotOrdering(t *testing.T) {
+	first := analyzer.Snapshot{
+		Analysis: analyzer.Analysis{
+			Rules:      []analyzer.Rule{{ID: "a"}, {ID: "b"}},
+			Violations: []analyzer.Violation{{ID: "a"}, {ID: "b"}},
+			Coverage:   []analyzer.Coverage{{NodeID: "a"}, {NodeID: "b"}},
+			Contracts:  []analyzer.Contract{{ID: "a"}, {ID: "b"}},
+			Complexity: []analyzer.Complexity{{NodeID: "a"}, {NodeID: "b"}},
+			Telemetry:  []analyzer.Telemetry{{NodeID: "a"}, {NodeID: "b"}},
+		},
+		Evidence: []analyzer.EvidenceRecord{{ID: "a"}, {ID: "b"}},
+	}
+	second := analyzer.Snapshot{
+		Analysis: analyzer.Analysis{
+			Rules:      []analyzer.Rule{{ID: "b"}, {ID: "a"}},
+			Violations: []analyzer.Violation{{ID: "b"}, {ID: "a"}},
+			Coverage:   []analyzer.Coverage{{NodeID: "b"}, {NodeID: "a"}},
+			Contracts:  []analyzer.Contract{{ID: "b"}, {ID: "a"}},
+			Complexity: []analyzer.Complexity{{NodeID: "b"}, {NodeID: "a"}},
+			Telemetry:  []analyzer.Telemetry{{NodeID: "b"}, {NodeID: "a"}},
+		},
+		Evidence: []analyzer.EvidenceRecord{{ID: "b"}, {ID: "a"}},
+	}
+	firstID := Compare("repo", "base", "head", 1, 2, first, first).ID
+	secondID := Compare("repo", "base", "head", 3, 4, second, second).ID
+	if firstID != secondID {
+		t.Fatalf("review IDs differ for reordered snapshots: %s != %s", firstID, secondID)
+	}
+}
+
 func TestCompareSerializesExplicitEmptyEvidenceRefs(t *testing.T) {
 	nodes := []analyzer.Node{{ID: "a", Kind: "function", Label: "A"}, {ID: "b", Kind: "function", Label: "B"}}
 	baseEdge := analyzer.Edge{ID: "a|calls|b", Source: "a", Target: "b", Kind: "calls", EvidenceRefs: []string{"old"}}

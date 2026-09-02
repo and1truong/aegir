@@ -19,6 +19,8 @@ func TestRunIndexesFunctionsCallsTestsAndContracts(t *testing.T) {
 		"cyclea/a.go":         "package cyclea\nimport \"example.com/shop/cycleb\"\nfunc A() { cycleb.B() }\n",
 		"cycleb/b.go":         "package cycleb\nimport \"example.com/shop/cyclea\"\nfunc B() { cyclea.A() }\n",
 		"api/openapi.yaml":    "openapi: 3.1.0\n",
+		"models/types.go":     "package models\ntype Order struct{}\n",
+		"types.go":            "package shop\ntype Root struct{}\n",
 		"coverage.out":        "mode: set\nexample.com/shop/order/order.go:4.1,4.180 1 1\nexample.com/shop/order/order.go:5.1,5.19 1 0\n",
 		"telemetry.json":      `[{"label":"Create","file":"order/order.go","rpm":8200,"p99":184,"errorRate":0.18,"window":"5m","source":"local-prometheus-export"}]`,
 	} {
@@ -54,6 +56,21 @@ func TestRunIndexesFunctionsCallsTestsAndContracts(t *testing.T) {
 	}
 	if len(snapshot.Analysis.Contracts) != 1 || snapshot.Analysis.Contracts[0].Fingerprint == "" || snapshot.Analysis.Contracts[0].Shape["/openapi"] == "" {
 		t.Fatal("expected normalized contract shape")
+	}
+	contractNode, packagePaths := Node{}, map[string]bool{}
+	for _, node := range snapshot.Nodes {
+		if node.ID == snapshot.Analysis.Contracts[0].Node {
+			contractNode = node
+		}
+		if node.Kind == "package" {
+			packagePaths[node.File] = true
+		}
+	}
+	if contractNode.Package == "" || !packagePaths["api"] {
+		t.Fatalf("expected contract to belong to its package: %#v", contractNode)
+	}
+	if !packagePaths["models"] || !packagePaths["."] {
+		t.Fatalf("expected package directories for packages without functions and at repository root: %#v", packagePaths)
 	}
 	if len(snapshot.Analysis.Complexity) == 0 {
 		t.Fatal("expected function complexity profiles")

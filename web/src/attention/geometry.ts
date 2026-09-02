@@ -11,11 +11,11 @@ export function stableJitter(id: string) {
 }
 
 export function bubbleRadius(unit: AttentionUnit) {
-  if (unit.changeVelocity.score === undefined) return 6;
+  if (unit.changeVelocity.score == null) return 6;
   const area = 110 + 700 * unit.changeVelocity.score / 100;
   return Math.sqrt(area / Math.PI);
 }
 
-export function zoomedScore(value: number | undefined, zoom: number) {
+export function zoomedScore(value: number | null, zoom: number) {
   return clamp(.5 + ((value ?? 0) / 100 - .5) * zoom, 0, 1);
 }

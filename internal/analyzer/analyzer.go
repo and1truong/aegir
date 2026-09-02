@@ -321,8 +321,10 @@ func newIndexer(root, repositoryName string) *indexer {
 
 func (x *indexer) packageFor(dir, packageName string) string {
 	rel, _ := filepath.Rel(x.root, dir)
+	path := rel
 	if rel == "." {
 		rel = packageName
+		path = "."
 	}
 	id, ok := x.packages[dir]
 	if ok {
@@ -330,7 +332,7 @@ func (x *indexer) packageFor(dir, packageName string) string {
 	}
 	id = stableID("package", filepath.ToSlash(rel))
 	x.packages[dir] = id
-	x.nodes[id] = Node{ID: id, Kind: "package", Label: filepath.ToSlash(rel), Service: x.serviceID, File: filepath.ToSlash(rel), Owner: ownerFor(x.owners, filepath.ToSlash(rel)+"/package.go")}
+	x.nodes[id] = Node{ID: id, Kind: "package", Label: filepath.ToSlash(rel), Service: x.serviceID, File: filepath.ToSlash(path), Owner: ownerFor(x.owners, filepath.ToSlash(path)+"/package.go")}
 	x.addEdge(x.serviceID, "owns", id, "contains", filepath.ToSlash(rel))
 	return id
 }
@@ -364,7 +366,7 @@ func ignoredDir(name string) bool {
 func (x *indexer) collect() error {
 	service := Node{ID: x.serviceID, Kind: "service", Label: x.serviceName, File: ".", Description: "Repository root", Meta: map[string]any{"module": x.module}}
 	x.nodes[service.ID] = service
-	return filepath.WalkDir(x.root, func(path string, entry os.DirEntry, walkErr error) error {
+	if err := filepath.WalkDir(x.root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -462,7 +464,18 @@ func (x *indexer) collect() error {
 			x.addEdge(pkgID, "owns", id, "declares", x.sourceLocation(fn.Pos()))
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	for _, contract := range x.contracts {
+		directory := filepath.Dir(filepath.Join(x.root, filepath.FromSlash(contract.Path)))
+		packageID := x.packageFor(directory, filepath.Base(directory))
+		node := x.nodes[contract.Node]
+		node.Package = packageID
+		x.nodes[contract.Node] = node
+		x.addEdge(packageID, "owns", contract.Node, "contains", contract.Path)
+	}
+	return nil
 }
 
 func receiverName(expr ast.Expr) string {

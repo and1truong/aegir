@@ -39,7 +39,7 @@ func TestCalculateRanksPackageWithImpactComplexityAndVelocity(t *testing.T) {
 	if value(a.Impact.Score) <= 0 || value(a.ChangeComplexity.Score) <= 0 || value(a.ChangeVelocity.Score) <= 0 {
 		t.Fatalf("expected explainable scores: %#v", a)
 	}
-	if a.Impact.Coverage < .799 || a.Impact.Coverage > .801 || a.ChangeVelocity.Coverage != 1 {
+	if a.Impact.Coverage < .699 || a.Impact.Coverage > .701 || a.ChangeVelocity.Coverage != 1 {
 		t.Fatalf("unexpected signal coverage: %#v", a)
 	}
 	if len(a.Impact.Factors[0].EvidenceRefs) == 0 || len(a.ChangeVelocity.Factors[0].EvidenceRefs) == 0 {
@@ -75,7 +75,7 @@ func TestCalculateUsesAvailableRuntimeSignalAndP90Complexity(t *testing.T) {
 	snapshot := analyzer.Snapshot{Nodes: nodes, Analysis: analyzer.Analysis{Complexity: complexity, Telemetry: []analyzer.Telemetry{{NodeID: "fn:1", RPM: 120}}}}
 	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
 	unit := landscape.Units[0]
-	if unit.Impact.Coverage < .899 || unit.Impact.Coverage > .901 {
+	if unit.Impact.Coverage < .799 || unit.Impact.Coverage > .801 {
 		t.Fatalf("runtime signal was not included: %#v", unit.Impact)
 	}
 	if got := unit.ChangeComplexity.Factors[len(unit.ChangeComplexity.Factors)-1].RawValue; got != 9 {
@@ -102,9 +102,64 @@ func TestCalculateMarksEveryPackageInDependencyCycle(t *testing.T) {
 	snapshot := analyzer.Snapshot{Nodes: append(packages, functions...), Edges: []analyzer.Edge{{ID: "a-b", Source: "fn:a", Target: "fn:b", Kind: "calls"}, {ID: "b-a", Source: "fn:b", Target: "fn:a", Kind: "calls"}}}
 	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
 	for _, unit := range landscape.Units {
-		cycle := unit.ChangeComplexity.Factors[4]
+		cycle := factorByID(unit.ChangeComplexity, "cycle-participation")
 		if cycle.RawValue != 1 {
 			t.Fatalf("package %s was not marked cyclic: %#v", unit.Unit.ID, cycle)
 		}
 	}
+}
+
+func TestCalculateMapsContractsAndHistoryToPackagesWithoutFunctions(t *testing.T) {
+	now := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	root := analyzer.Node{ID: "pkg:root", Kind: "package", Label: "repo", File: "."}
+	model := analyzer.Node{ID: "pkg:model", Kind: "package", Label: "internal/model", File: "internal/model"}
+	contract := analyzer.Node{ID: "contract:api", Kind: "contract", Package: model.ID, File: "internal/model/openapi.yaml"}
+	snapshot := analyzer.Snapshot{
+		Nodes:    []analyzer.Node{root, model, contract},
+		Analysis: analyzer.Analysis{Contracts: []analyzer.Contract{{ID: "api", Node: contract.ID}}},
+	}
+	changes := history.Result{Events: []history.ChangeEvent{{
+		ID: "git:new", OccurredAt: now, AuthorKey: "author",
+		Files: []history.FileChange{{Path: "internal/model/types.go", Additions: 12}, {Path: "schema.sql", Additions: 4}},
+	}}}
+	landscape := Calculate("repo", 1, snapshot, &changes, 90, now)
+	units := map[string]Unit{}
+	for _, unit := range landscape.Units {
+		units[unit.Unit.ID] = unit
+	}
+	if owned := factorByID(units[model.ID].Impact, "owned-contracts"); owned.RawValue != 1 {
+		t.Fatalf("contract was not attributed to its package: %#v", owned)
+	}
+	for _, packageID := range []string{root.ID, model.ID} {
+		churn := factorByID(units[packageID].ChangeVelocity, "meaningful-churn")
+		if churn.RawValue == 0 {
+			t.Fatalf("history was not attributed to package %s: %#v", packageID, units[packageID])
+		}
+	}
+}
+
+func TestCalculateUsesCodeOwnershipForCrossTeamFactors(t *testing.T) {
+	pkgA := analyzer.Node{ID: "pkg:a", Kind: "package", Label: "a", Owner: "@one"}
+	pkgB := analyzer.Node{ID: "pkg:b", Kind: "package", Label: "b", Owner: "@two"}
+	fnA := analyzer.Node{ID: "fn:a", Kind: "function", Package: pkgA.ID}
+	fnB := analyzer.Node{ID: "fn:b", Kind: "function", Package: pkgB.ID}
+	snapshot := analyzer.Snapshot{Nodes: []analyzer.Node{pkgA, pkgB, fnA, fnB}, Edges: []analyzer.Edge{{ID: "b-a", Source: fnB.ID, Target: fnA.ID, Kind: "calls"}}}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	for _, unit := range landscape.Units {
+		if unit.Unit.ID == pkgA.ID {
+			factor := factorByID(unit.Impact, "cross-team-dependents")
+			if unit.Unit.Team != "@one" || factor.Status != "observed" || factor.RawValue != 1 {
+				t.Fatalf("ownership signal missing: %#v", unit)
+			}
+		}
+	}
+}
+
+func factorByID(dimension Dimension, id string) Factor {
+	for _, factor := range dimension.Factors {
+		if factor.ID == id {
+			return factor
+		}
+	}
+	return Factor{}
 }

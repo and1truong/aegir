@@ -91,7 +91,7 @@ func UpdateGit(root string, previous Result, ref string, windowDays int, now tim
 }
 
 func readGit(root, revision, resultRef string, windowDays int, since time.Time) (Result, error) {
-	command := exec.Command("git", "-C", root, "-c", "core.quotepath=false", "log", revision, "--since="+since.Format(time.RFC3339), "--format=commit:%H%x09%aI%x09%ae%x09%P%x09%s", "--numstat", "--find-renames", "--ignore-all-space", "--no-merges")
+	command := exec.Command("git", "-C", root, "-c", "core.quotepath=false", "log", revision, "--since="+since.Format(time.RFC3339), "--format=commit:%H%x09%cI%x09%ae%x09%P%x09%s", "--numstat", "--find-renames", "--ignore-all-space", "--no-merges")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return Result{}, fmt.Errorf("read Git history: %w: %s", err, strings.TrimSpace(string(output)))
@@ -118,7 +118,7 @@ func Parse(input, ref string, windowDays int, completeFrom time.Time) (Result, e
 			}
 			occurredAt, err := time.Parse(time.RFC3339, fields[1])
 			if err != nil {
-				return Result{}, fmt.Errorf("parse Git author time: %w", err)
+				return Result{}, fmt.Errorf("parse Git commit time: %w", err)
 			}
 			author := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(fields[2]))))
 			summary := ""

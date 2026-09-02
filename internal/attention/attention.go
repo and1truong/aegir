@@ -15,30 +15,30 @@ import (
 var dependencyKinds = map[string]bool{"calls": true, "depends_on": true}
 
 type packageFacts struct {
-	node            analyzer.Node
-	members         []string
-	incoming        map[string]bool
-	outgoing        map[string]bool
-	edges           map[string]bool
-	incomingEdges   map[string]bool
-	outgoingEdges   map[string]bool
-	boundaries      map[string]bool
-	boundaryEdges   map[string]bool
-	stateEdges      map[string]bool
-	asyncEdges      map[string]bool
-	sharedUnits     map[string]bool
+	node                analyzer.Node
+	members             []string
+	incoming            map[string]bool
+	outgoing            map[string]bool
+	edges               map[string]bool
+	incomingEdges       map[string]bool
+	outgoingEdges       map[string]bool
+	boundaries          map[string]bool
+	boundaryEdges       map[string]bool
+	stateEdges          map[string]bool
+	asyncEdges          map[string]bool
+	sharedUnits         map[string]bool
 	crossTeamDependents map[string]bool
 	crossTeamEdges      map[string]bool
 	outgoingTeamEdges   map[string]bool
-	transitiveCount int
-	transitiveEdges map[string]bool
-	centrality      float64
-	inCycle         bool
-	localComplexity float64
-	complexities    []float64
-	contracts       int
-	runtimeTraffic  float64
-	velocity        velocityFacts
+	transitiveCount     int
+	transitiveEdges     map[string]bool
+	centrality          float64
+	inCycle             bool
+	localComplexity     float64
+	complexities        []float64
+	contracts           int
+	runtimeTraffic      float64
+	velocity            velocityFacts
 }
 
 type velocityFacts struct {
@@ -57,6 +57,7 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 	facts := map[string]*packageFacts{}
 	nodePackage := map[string]string{}
 	filePackage := map[string]string{}
+	packageDirs := map[string]string{}
 	for _, node := range snapshot.Nodes {
 		byID[node.ID] = node
 		if node.Kind == "package" && !contains(node.Tags, "external") {
@@ -73,6 +74,13 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 		}
 		nodePackage[node.ID] = unitID
 		facts[unitID].members = append(facts[unitID].members, node.ID)
+		if node.Kind == "package" {
+			directory := strings.Trim(filepath.ToSlash(sourceFile(node.File)), "/")
+			if directory == "." {
+				directory = ""
+			}
+			packageDirs[directory] = unitID
+		}
 		if file := sourceFile(node.File); file != "" && node.Kind != "package" {
 			filePackage[file] = unitID
 		}
@@ -144,7 +152,11 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 		}
 	}
 	for _, contract := range snapshot.Analysis.Contracts {
-		if unit := nodePackage[contract.Node]; unit != "" {
+		unit := nodePackage[contract.Node]
+		if node, ok := byID[contract.Node]; unit == "" && ok {
+			unit = unitForFile(node.File, filePackage, packageDirs)
+		}
+		if unit != "" {
 			facts[unit].contracts++
 		}
 	}
@@ -154,7 +166,7 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 		}
 	}
 	if changes != nil {
-		applyVelocity(facts, filePackage, *changes, windowDays, now)
+		applyVelocity(facts, filePackage, packageDirs, *changes, windowDays, now)
 	}
 
 	values := collectValues(facts)
@@ -334,25 +346,7 @@ func unavailableVelocityDimension() Dimension {
 	})
 }
 
-func applyVelocity(facts map[string]*packageFacts, files map[string]string, changes history.Result, windowDays int, now time.Time) {
-	unitForPath := func(path string) string {
-		if unit := files[path]; unit != "" {
-			return unit
-		}
-		best, bestUnit := "", ""
-		for file, unit := range files {
-			dir := file
-			if index := strings.LastIndex(dir, "/"); index >= 0 {
-				dir = dir[:index]
-			} else {
-				dir = ""
-			}
-			if dir != "" && strings.HasPrefix(path, dir+"/") && (len(dir) > len(best) || len(dir) == len(best) && unit < bestUnit) {
-				best, bestUnit = dir, unit
-			}
-		}
-		return bestUnit
-	}
+func applyVelocity(facts map[string]*packageFacts, files, packageDirs map[string]string, changes history.Result, windowDays int, now time.Time) {
 	for _, event := range changes.Events {
 		age := math.Max(0, now.Sub(event.OccurredAt).Hours()/24)
 		if age > float64(windowDays) {
@@ -365,9 +359,9 @@ func applyVelocity(facts map[string]*packageFacts, files map[string]string, chan
 			if file.Generated || file.Excluded || file.Rename && file.Additions+file.Deletions == 0 {
 				continue
 			}
-			unit := unitForPath(file.Path)
+			unit := unitForFile(file.Path, files, packageDirs)
 			if unit == "" && file.OldPath != "" {
-				unit = unitForPath(file.OldPath)
+				unit = unitForFile(file.OldPath, files, packageDirs)
 			}
 			if unit != "" {
 				perUnit[unit] += file.Additions + file.Deletions
@@ -394,6 +388,20 @@ func applyVelocity(facts map[string]*packageFacts, files map[string]string, chan
 			}
 		}
 	}
+}
+
+func unitForFile(path string, files, packageDirs map[string]string) string {
+	path = strings.TrimPrefix(filepath.ToSlash(sourceFile(path)), "./")
+	if unit := files[path]; unit != "" {
+		return unit
+	}
+	best, bestUnit := "", packageDirs[""]
+	for directory, unit := range packageDirs {
+		if directory != "" && (path == directory || strings.HasPrefix(path, directory+"/")) && (len(directory) > len(best) || len(directory) == len(best) && unit < bestUnit) {
+			best, bestUnit = directory, unit
+		}
+	}
+	return bestUnit
 }
 
 func architectureBearing(path string) bool {

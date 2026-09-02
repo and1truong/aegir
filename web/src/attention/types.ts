@@ -13,13 +13,13 @@ export interface AttentionFactor {
 }
 
 export interface AttentionDimension {
-  score?: number;
+  score: number | null;
   coverage: number;
   factors: AttentionFactor[];
 }
 
 export interface AttentionUnit {
-  unit: { id: string; label: string; path?: string; kind: 'package' };
+  unit: { id: string; label: string; path?: string; kind: 'package'; team?: string; subsystem?: string };
   impact: AttentionDimension;
   changeComplexity: AttentionDimension;
   changeVelocity: AttentionDimension;

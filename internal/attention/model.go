@@ -108,5 +108,5 @@ type ReviewAttention struct {
 }
 
 func DefaultPolicy() Policy {
-	return Policy{ID: "default-v1", ImpactHigh: 55, ComplexityHigh: 60, VelocityFast: 65, MaximumFindings: 3, MinimumFindingPriority: 45}
+	return Policy{ID: "default-v1", ImpactHigh: 50, ComplexityHigh: 60, VelocityFast: 65, MaximumFindings: 3, MinimumFindingPriority: 45}
 }

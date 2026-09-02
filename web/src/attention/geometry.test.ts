@@ -4,11 +4,12 @@ import { bubbleRadius, stableJitter, zoomedScore } from './geometry.ts';
 import type { AttentionUnit } from './types.ts';
 
 function unit(velocity?: number): AttentionUnit {
-  return { unit: { id: 'package:a', label: 'a', kind: 'package' }, impact: { score: 50, coverage: 1, factors: [] }, changeComplexity: { score: 50, coverage: 1, factors: [] }, changeVelocity: { score: velocity, coverage: velocity === undefined ? 0 : 1, factors: [] }, priority: 50, region: 'low-attention', memberCount: 1 };
+  return { unit: { id: 'package:a', label: 'a', kind: 'package' }, impact: { score: 50, coverage: 1, factors: [] }, changeComplexity: { score: 50, coverage: 1, factors: [] }, changeVelocity: { score: velocity ?? null, coverage: velocity === undefined ? 0 : 1, factors: [] }, priority: 50, region: 'low-attention', memberCount: 1 };
 }
 
 test('bubble area grows with velocity while missing history stays visibly bounded', () => {
   assert.equal(bubbleRadius(unit()), 6);
+  assert.equal(bubbleRadius({ ...unit(50), changeVelocity: { score: null, coverage: 0, factors: [] } }), 6);
   assert.ok(bubbleRadius(unit(100)) > bubbleRadius(unit(0)));
 });
 

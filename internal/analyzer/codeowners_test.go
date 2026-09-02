@@ -17,8 +17,8 @@ func TestReadCodeOwnersUsesLastMatchingRule(t *testing.T) {
 	}
 	rules := readCodeOwners(root)
 	for file, expected := range map[string]string{
-		"README.md":                     "@platform",
-		"internal/payments/charge.go":   "@payments",
+		"README.md":                       "@platform",
+		"internal/payments/charge.go":     "@payments",
 		"internal/payments/service.proto": "@contracts",
 	} {
 		if actual := ownerFor(rules, file); actual != expected {

@@ -87,8 +87,8 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
       const color = regionColor[point.unit.region];
       context.globalAlpha = touchedUnitIds && !touchedUnitIds.has(point.unit.unit.id) ? .22 : 1;
       context.beginPath(); context.arc(point.x, point.y, point.radius, 0, Math.PI * 2);
-      context.fillStyle = point.unit.changeVelocity.score === undefined ? (theme === 'light' ? 'rgba(244,244,245,.9)' : 'rgba(24,24,27,.9)') : color + '55'; context.fill();
-      context.setLineDash(point.unit.changeVelocity.score === undefined ? [3, 2] : []);
+      context.fillStyle = point.unit.changeVelocity.score == null ? (theme === 'light' ? 'rgba(244,244,245,.9)' : 'rgba(24,24,27,.9)') : color + '55'; context.fill();
+      context.setLineDash(point.unit.changeVelocity.score == null ? [3, 2] : []);
       context.strokeStyle = color; context.lineWidth = findingIds.has(point.unit.unit.id) ? 2 : 1; context.stroke();
       context.setLineDash([]);
       if (touchedUnitIds?.has(point.unit.unit.id)) {

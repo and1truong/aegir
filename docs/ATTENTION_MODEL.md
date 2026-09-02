@@ -10,13 +10,15 @@ All scores are deterministic integers from 0–100. Raw factors are normalized a
 
 The versioned `attention-v1.0` model uses:
 
-- Impact / Criticality: direct dependents (25%), transitive dependent reach (20%), dependency brokerage (15%), shared state/event reach (10%), owned contracts (10%), runtime traffic (10%), and business criticality (10%). Runtime and business factors remain explicitly unavailable when no source exists.
-- Change Complexity: fan-out (20%), technical boundary variety (20%), stateful relationships (15%), async relationships (15%), cycles (15%), contract coupling (10%), and p90 indexed symbol complexity (5%).
+- Impact / Criticality: direct dependents (20%), transitive dependent reach (15%), dependency brokerage (15%), shared state/event reach (10%), cross-team dependents (10%), owned contracts (10%), runtime traffic (10%), and business criticality (10%). Runtime, ownership and business factors remain explicitly unavailable when no source exists.
+- Change Complexity: fan-out (15%), technical boundary variety (15%), cross-team dependencies (10%), stateful relationships (15%), async relationships (15%), cycles (15%), contract coupling (10%), and p90 indexed symbol complexity (5%).
 - Change Velocity: recency-weighted meaningful churn (35%), recency-weighted change sets (25%), active weeks (15%), distinct anonymized authors (10%), and contract/schema changes (15%). Git signals use a 30-day half-life.
 
 Generated files, documentation and lockfiles are excluded from velocity. Git is read with whitespace ignored; rename-only files are ignored, and mass-rename commits are downweighted. Per-commit churn is capped to prevent a single bulk change from dominating.
 
-Default action thresholds are impact 55 and complexity 60. Velocity 65 is considered fast. The threshold set has its own `default-v1` policy identity so later calibration never silently changes saved interpretations.
+Team ownership is loaded from the first standard `CODEOWNERS` file (`.github/`, repository root, then `docs/`) using last-match-wins rules. It feeds cross-team impact/complexity factors and the optional team filter; repositories without ownership keep those factors explicitly unavailable.
+
+Default action thresholds are impact 50 and complexity 60. Velocity 65 is considered fast. The threshold set has its own `default-v1` policy identity so later calibration never silently changes saved interpretations.
 
 ## Findings
 

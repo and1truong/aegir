@@ -1,5 +1,6 @@
 import type { EdgeKind } from '../../data/types';
-import type { FrontierGroup, GraphIndex, ProjectionDirection } from '../types';
+import type { FrontierGroup, GraphIndex, GroupingDimensionId, ProjectionDirection } from '../types';
+import { groupingValue } from './groupingDimensions.ts';
 
 export interface GroupCandidate {
   nodeId: string;
@@ -14,16 +15,8 @@ interface GroupingOptions {
   parentFrontierId?: string;
   direction: ProjectionDirection;
   category: string;
-  dimensions?: Array<'service' | 'package' | 'team' | 'relation'>;
+  dimensions?: readonly GroupingDimensionId[];
   maxGroups?: number;
-}
-
-function dimensionValue(index: GraphIndex, candidate: GroupCandidate, dimension: NonNullable<GroupingOptions['dimensions']>[number]) {
-  const membership = index.membership.get(candidate.nodeId);
-  if (dimension === 'service') return membership?.service;
-  if (dimension === 'package') return membership?.pkg;
-  if (dimension === 'team') return membership?.owner;
-  return candidate.relation;
 }
 
 function labelFor(index: GraphIndex, value: string, count: number) {
@@ -63,10 +56,10 @@ function createGroup(index: GraphIndex, candidates: GroupCandidate[], options: G
 export function groupFrontierCandidates(index: GraphIndex, candidates: GroupCandidate[], options: GroupingOptions): FrontierGroup[] {
   if (candidates.length === 0) return [];
   const dimensions = options.dimensions ?? ['service', 'package', 'relation'];
-  const dimension = dimensions.find((candidateDimension) => candidates.some((candidate) => dimensionValue(index, candidate, candidateDimension))) ?? 'relation';
+  const dimension = dimensions.find((candidateDimension) => candidates.some((candidate) => groupingValue(candidateDimension, index, candidate))) ?? 'relation';
   const buckets = new Map<string, GroupCandidate[]>();
   for (const candidate of candidates) {
-    const value = dimensionValue(index, candidate, dimension) ?? 'ungrouped';
+    const value = groupingValue(dimension, index, candidate) ?? 'ungrouped';
     buckets.set(value, [...(buckets.get(value) ?? []), candidate]);
   }
   const ranked = [...buckets.entries()]

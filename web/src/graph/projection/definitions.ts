@@ -19,6 +19,7 @@ function definition(id: string, label: string, kinds: EdgeKind[], layoutStrategy
     layoutStrategy,
     relevanceWeights: { change: 9, direct: 8, runtime: 5, contract: 5, failure: 4, ownership: 3, architecture: 3, structural: 1 },
     category: 'signal',
+    groupingDimensions: ['service', 'package', 'relation'],
   };
 }
 
@@ -49,6 +50,12 @@ export const projectionDefinitions: Record<string, ProjectionDefinition> = {
   'cross-team-dependencies': question('cross-team-dependencies', 'Cross-team dependencies', 'Calls, events, and contracts that cross known ownership boundaries.', ['calls', 'publishes', 'consumes', 'implements'], 'ownership'),
   'what-changed-architecturally': question('what-changed-architecturally', 'What changed architecturally?', 'Changed graph facts plus ranked structural and impact context.', ['calls', 'depends_on', 'reads', 'writes', 'publishes', 'consumes', 'implements'], 'changes'),
 };
+
+projectionDefinitions['hot-path'].groupingDimensions = ['traffic', 'service', 'package', 'relation'];
+projectionDefinitions['state-mutation'].groupingDimensions = ['access', 'service', 'package', 'relation'];
+projectionDefinitions['cross-team-dependencies'].groupingDimensions = ['team', 'service', 'package', 'relation'];
+projectionDefinitions['transaction-boundaries'].groupingDimensions = ['access', 'service', 'package', 'relation'];
+projectionDefinitions['what-can-break'].groupingDimensions = ['service', 'team', 'package', 'relation'];
 
 export const questionProjectionIds = Object.values(projectionDefinitions).filter((item) => item.category === 'question').map((item) => item.id);
 export const signalProjectionIds = Object.values(projectionDefinitions).filter((item) => item.category === 'signal' && item.id !== 'review').map((item) => item.id);

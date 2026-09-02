@@ -50,7 +50,10 @@ export interface ProjectionDefinition {
   relevanceWeights: RelevanceWeights;
   category: 'question' | 'signal';
   evidenceRequirement?: 'runtime' | 'ownership' | 'changes';
+  groupingDimensions: readonly GroupingDimensionId[];
 }
+
+export type GroupingDimensionId = 'service' | 'package' | 'team' | 'relation' | 'topic' | 'access' | 'traffic';
 
 export type InclusionReason =
   | { kind: 'root'; detail: string }
@@ -70,7 +73,7 @@ export interface FrontierGroup {
   parentFrontierId?: string;
   direction: ProjectionDirection;
   category: string;
-  dimension: 'service' | 'package' | 'team' | 'relation' | 'remainder';
+  dimension: GroupingDimensionId | 'remainder';
   value: string;
   visibleCount: number;
   hiddenCount: number;

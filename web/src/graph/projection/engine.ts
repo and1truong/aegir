@@ -169,7 +169,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
         if (ordered.length > branchLimit && hasMembership) {
           selected = [];
           const groupCandidates = ordered.map((candidate) => ({ nodeId: candidate.node.id, relation: candidate.edge.kind, score: candidate.score.total, evidenceIds: survivingEvidence.get(candidate.edge.id) ?? [], withinDepth: candidate.nextDepth <= limit }));
-          const groups = groupFrontierCandidates(index, groupCandidates, { parentId: current.id, direction, category: groupCategory });
+          const groups = groupFrontierCandidates(index, groupCandidates, { parentId: current.id, direction, category: groupCategory, dimensions: definition.groupingDimensions });
           for (const group of groups) {
             const members = ordered.filter((candidate) => group.memberNodeIds.includes(candidate.node.id));
             if (!expansions[group.id]) {

@@ -58,13 +58,14 @@ export type GroupingDimensionId = 'service' | 'package' | 'team' | 'relation' | 
 export type InclusionReason =
   | { kind: 'root'; detail: string }
   | { kind: 'pin'; detail: string }
+  | { kind: 'locked-path'; detail: string }
   | { kind: 'overview'; detail: string }
   | { kind: 'traversal'; direction: ProjectionDirection; semanticDepth: number; viaEdgeId: string; fromNodeId: string; detail: string }
   | { kind: 'frontier'; detail: string };
 
 export interface CandidateExplanation {
   total: number;
-  components: Array<{ signal: RelevanceSignal | 'root' | 'pin' | 'overview'; raw: number; normalized: number; weight: number; contribution: number; evidenceIds: string[] }>;
+  components: Array<{ signal: RelevanceSignal | 'root' | 'pin' | 'locked-path' | 'overview'; raw: number; normalized: number; weight: number; contribution: number; evidenceIds: string[] }>;
   reason: string;
 }
 
@@ -92,11 +93,11 @@ export type VisibleNode =
   | { kind: 'frontier'; id: string; frontier: FrontierGroup; reason: InclusionReason };
 
 export type VisibleEdge =
-  | { kind: 'real'; id: string; edge: SysEdge; source: string; target: string; canonicalEdgeIds: string[]; reason: InclusionReason; evidenceIds: string[] }
+  | { kind: 'real'; id: string; edge: SysEdge; source: string; target: string; canonicalEdgeIds: string[]; reason: InclusionReason; evidenceIds: string[]; broken?: boolean }
   | { kind: 'frontier-link'; id: string; source: string; target: string; canonicalEdgeIds: string[]; reason: InclusionReason; evidenceIds: string[] };
 
 export interface ProjectionWarning {
-  code: 'missing-root' | 'missing-pin' | 'root-budget' | 'hard-budget' | 'missing-evidence' | 'evidence-disconnected';
+  code: 'missing-root' | 'missing-pin' | 'broken-path' | 'root-budget' | 'hard-budget' | 'missing-evidence' | 'evidence-disconnected';
   message: string;
 }
 

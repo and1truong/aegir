@@ -13,8 +13,16 @@ export interface FrontierExpansion {
 
 export interface LockedPath {
   id: string;
+  version: 1;
+  queryId: string;
   nodeIds: string[];
   edgeIds: string[];
+  evidencePolicy: { maximumLevel: EvidenceLevel; includeStale: boolean };
+  sourceNodeId: string;
+  targetNodeId: string;
+  semanticHops: number;
+  alternateCount: number;
+  abstraction: AbstractionLevel;
 }
 
 export interface InvestigationState {

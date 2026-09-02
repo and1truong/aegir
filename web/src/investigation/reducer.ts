@@ -16,6 +16,8 @@ export type InvestigationAction =
   | { type: 'pinNode'; nodeId: string }
   | { type: 'unpinNode'; nodeId: string }
   | { type: 'clearPins' }
+  | { type: 'lockPath'; path: NonNullable<InvestigationState['lockedPath']> }
+  | { type: 'unlockPath' }
   | { type: 'expandFrontier'; frontierId: string; beyondDepth?: boolean }
   | { type: 'collapseFrontier'; frontierId: string }
   | { type: 'clearFrontiers' };
@@ -58,6 +60,10 @@ export function investigationReducer(state: InvestigationState, action: Investig
       return { ...state, pinnedNodeIds: state.pinnedNodeIds.filter((id) => id !== action.nodeId) };
     case 'clearPins':
       return { ...state, pinnedNodeIds: [] };
+    case 'lockPath':
+      return { ...state, lockedPath: { ...action.path, nodeIds: [...action.path.nodeIds], edgeIds: [...action.path.edgeIds], evidencePolicy: { ...action.path.evidencePolicy } } };
+    case 'unlockPath':
+      return { ...state, lockedPath: undefined };
     case 'expandFrontier': {
       const current = state.expandedFrontiers[action.frontierId];
       return {

@@ -114,3 +114,22 @@ test('pins reserve visible budget independently of the focal traversal', () => {
   assert.equal(graph.nodes.find((item) => item.id === 'reference')?.reason.kind, 'pin');
   assert.ok(graph.revision.includes('pins:reference'));
 });
+
+test('locked paths reserve ordered entities and expose stale segments', () => {
+  const nodes = [node('root'), node('middle'), node('target'), node('noise')];
+  const edges = [edge('root', 'middle'), edge('middle', 'target'), edge('root', 'noise')];
+  const index = createGraphIndex(nodes, edges);
+  const graph = projectVisibleGraph(index, projectionDefinition('dependencies'), { activeNodeId: 'noise', requiredNodeIds: ['root', 'middle', 'target'], requiredEdgeIds: ['root:calls:middle', 'middle:calls:target'], upstreamDepth: 0, downstreamDepth: 0, nodeBudget: 4, edgeKinds: new Set(), evidencePolicy: { maximumLevel: 'proven', includeStale: false } });
+  assert.deepEqual(realIds(graph), ['root', 'middle', 'target', 'noise']);
+  assert.equal(graph.nodes.find((item) => item.id === 'middle')?.reason.kind, 'locked-path');
+  const pathEdges = graph.edges.filter((item) => item.kind === 'real');
+  assert.deepEqual(pathEdges.map((item) => item.id), ['root:calls:middle', 'middle:calls:target']);
+  assert.ok(pathEdges.every((item) => item.broken));
+  assert.ok(graph.revision.includes('path:root:calls:middle,middle:calls:target'));
+});
+
+test('locked paths report missing segments without dropping surviving nodes', () => {
+  const graph = projectVisibleGraph(createGraphIndex([node('root')], []), projectionDefinition('dependencies'), { activeNodeId: 'root', requiredNodeIds: ['missing'], requiredEdgeIds: ['missing-edge'] });
+  assert.ok(graph.warnings.some((warning) => warning.code === 'broken-path' && warning.message.includes('2 missing segments')));
+  assert.deepEqual(realIds(graph), ['root']);
+});

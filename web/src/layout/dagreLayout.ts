@@ -10,8 +10,8 @@ function rankdir(strategy: LayoutStrategy) {
   return strategy === 'explicit-TB' ? 'TB' as const : 'LR' as const;
 }
 
-export function positionGraph(topologyRevision: string, nodes: readonly LayoutNode[], links: readonly LayoutLink[], strategy: LayoutStrategy, anchorId?: string, pinnedNodeIds: readonly string[] = []): PositionedLayout {
-  const key = `${topologyRevision}|${strategy}|${anchorId ?? ''}|${[...pinnedNodeIds].sort().join(',')}`;
+export function positionGraph(topologyRevision: string, nodes: readonly LayoutNode[], links: readonly LayoutLink[], strategy: LayoutStrategy, anchorId?: string, pinnedNodeIds: readonly string[] = [], lockedPathNodeIds: readonly string[] = []): PositionedLayout {
+  const key = `${topologyRevision}|${strategy}|${anchorId ?? ''}|${[...pinnedNodeIds].sort().join(',')}|path:${lockedPathNodeIds.join(',')}`;
   const cached = cache.get(key);
   if (cached) return cached;
   computations++;
@@ -21,6 +21,12 @@ export function positionGraph(topologyRevision: string, nodes: readonly LayoutNo
   const pins = [...new Set(pinnedNodeIds)].filter((id) => raw.has(id)).sort();
   const pinSlots = pins.map((id) => raw.get(id)!.y).sort((a, b) => a - b);
   pins.forEach((id, index) => raw.set(id, { ...raw.get(id)!, y: pinSlots[index] }));
+  const path = [...new Set(lockedPathNodeIds)].filter((id) => raw.has(id));
+  if (path.length > 1 && strategy !== 'explicit-TB') {
+    const xSlots = path.map((id) => raw.get(id)!.x).sort((a, b) => a - b);
+    const laneY = path.map((id) => raw.get(id)!.y).sort((a, b) => a - b)[Math.floor(path.length / 2)];
+    path.forEach((id, index) => raw.set(id, { x: xSlots[index], y: laneY }));
+  }
   const normalized = normalizeToAnchor(raw, orderedNodes, anchorId);
   const result = { topologyRevision, layoutRevision: ++revision, positions: normalized.positions, anchor: normalized.anchor };
   cache.set(key, result);

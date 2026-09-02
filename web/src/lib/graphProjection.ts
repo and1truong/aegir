@@ -21,6 +21,7 @@ export interface GraphProjectionOptions {
   branchPageSize?: number;
   evidencePolicy?: EvidencePolicy;
   pinnedNodeIds?: string[];
+  lockedPath?: { nodeIds: string[]; edgeIds: string[] };
 }
 
 export interface FrontierAggregate {
@@ -95,6 +96,8 @@ export function projectGraphIndex(index: GraphIndex, options: GraphProjectionOpt
     branchPageSize: options.branchPageSize,
     evidencePolicy: options.evidencePolicy,
     pinnedNodeIds: options.pinnedNodeIds,
+    requiredNodeIds: options.lockedPath?.nodeIds,
+    requiredEdgeIds: options.lockedPath?.edgeIds,
   }));
 }
 

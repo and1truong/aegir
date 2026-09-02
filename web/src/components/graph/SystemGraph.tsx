@@ -62,6 +62,7 @@ export interface SystemGraphProps {
   className?: string;
   anchorNodeId?: string;
   pinnedNodeIds?: string[];
+  lockedPathNodeIds?: string[];
   topologyRevision?: string;
   layoutStrategy?: LayoutStrategy;
   rankdir?: 'LR' | 'TB';
@@ -406,7 +407,7 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
 
   const topologyRevision = props.topologyRevision ?? `${items.map((item) => item.id).join(',')}|${links.map((link) => `${link.source}>${link.target}`).join(',')}|${props.rankdir ?? 'LR'}`;
   const strategy = props.rankdir === 'TB' ? 'explicit-TB' : props.layoutStrategy ?? 'dependency-LR';
-  const pos = new Map(positionGraph(topologyRevision, items, links, strategy, props.anchorNodeId ?? props.selected, props.pinnedNodeIds).positions);
+  const pos = new Map(positionGraph(topologyRevision, items, links, strategy, props.anchorNodeId ?? props.selected, props.pinnedNodeIds, props.lockedPathNodeIds).positions);
 
   for (const fn of flowNodes) {
     const p = pos.get(fn.id);
@@ -439,7 +440,7 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
 // Canvas
 // ---------------------------------------------------------------------------
 function Canvas(props: SystemGraphProps) {
-  const built = useMemo(() => build(props), [props.nodes, props.edges, props.frontiers, props.decor, props.selected, props.selectedEdge, props.compact, props.rankdir, props.topologyRevision, props.layoutStrategy, props.pinnedNodeIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const built = useMemo(() => build(props), [props.nodes, props.edges, props.frontiers, props.decor, props.selected, props.selectedEdge, props.compact, props.rankdir, props.topologyRevision, props.layoutStrategy, props.pinnedNodeIds, props.lockedPathNodeIds]); // eslint-disable-line react-hooks/exhaustive-deps
   const [nodes, setNodes, onNodesChange] = useNodesState<AnyNode>(built.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<SysFlowEdge>(built.edges);
   const { fitView, getViewport, setViewport } = useReactFlow();

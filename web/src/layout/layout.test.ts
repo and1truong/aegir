@@ -44,3 +44,12 @@ test('pin soft constraints use stable semantic lane order', () => {
   assert.ok(positioned.positions.get('a')!.y <= positioned.positions.get('b')!.y);
   assert.equal(layoutComputationCount(), 1);
 });
+
+test('locked paths keep ordered nodes on one stable lane', () => {
+  clearLayoutCache();
+  const pathNodes = ['a', 'b', 'c', 'noise'].map((id) => ({ id, width: 100, height: 40 }));
+  const result = positionGraph('locked-path', pathNodes, [{ source: 'c', target: 'b' }, { source: 'b', target: 'a' }, { source: 'noise', target: 'b' }], 'dependency-LR', 'b', [], ['a', 'b', 'c']);
+  const path = ['a', 'b', 'c'].map((id) => result.positions.get(id)!);
+  assert.ok(path[0].x < path[1].x && path[1].x < path[2].x);
+  assert.deepEqual(path.map((point) => point.y), [path[0].y, path[0].y, path[0].y]);
+});

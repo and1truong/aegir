@@ -91,7 +91,7 @@ test('history is bounded, serializable, and resets at repository boundaries', ()
 test('missing focal fallback prefers locked path, then pin, then root', () => {
   const state = createInvestigationState();
   state.focalNodeId = 'deleted';
-  state.lockedPath = { id: 'path', nodeIds: ['also-deleted', 'locked'], edgeIds: [] };
+  state.lockedPath = { id: 'path', version: 1, queryId: 'semantic-dependency', nodeIds: ['also-deleted', 'locked'], edgeIds: [], evidencePolicy: { maximumLevel: 'observed', includeStale: false }, sourceNodeId: 'also-deleted', targetNodeId: 'locked', semanticHops: 1, alternateCount: 0, abstraction: 'symbol' };
   state.pinnedNodeIds = ['pinned'];
   assert.equal(reconcileMissingFocal(state, new Set(['locked', 'pinned', 'root']), 'root'), 'locked');
   state.lockedPath = undefined;
@@ -108,4 +108,16 @@ test('pins are deterministic, capped at five, removable, and clearable', () => {
   assert.equal(state.pinnedNodeIds.includes('node-2'), false);
   state = investigationReducer(state, { type: 'clearPins' });
   assert.deepEqual(state.pinnedNodeIds, []);
+});
+
+test('path locking copies ordered state and unlock restores the projection state', () => {
+  const before = createInvestigationState();
+  const path = { id: 'path:a', version: 1 as const, queryId: 'semantic-dependency', nodeIds: ['a', 'b'], edgeIds: ['a-b'], evidencePolicy: { maximumLevel: 'observed' as const, includeStale: false }, sourceNodeId: 'a', targetNodeId: 'b', semanticHops: 1, alternateCount: 2, abstraction: 'symbol' as const };
+  const locked = investigationReducer(before, { type: 'lockPath', path });
+  path.nodeIds.push('mutated');
+  assert.deepEqual(locked.lockedPath?.nodeIds, ['a', 'b']);
+  const unlocked = investigationReducer(locked, { type: 'unlockPath' });
+  assert.equal(unlocked.lockedPath, undefined);
+  assert.equal(unlocked.projectionId, before.projectionId);
+  assert.deepEqual(unlocked.depth, before.depth);
 });

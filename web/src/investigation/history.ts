@@ -16,7 +16,7 @@ function snapshot(state: InvestigationState): InvestigationState {
     evidencePolicy: { ...state.evidencePolicy },
     expandedFrontiers: Object.fromEntries(Object.entries(state.expandedFrontiers).map(([id, expansion]) => [id, { ...expansion }])),
     pinnedNodeIds: [...state.pinnedNodeIds],
-    lockedPath: state.lockedPath ? { ...state.lockedPath, nodeIds: [...state.lockedPath.nodeIds], edgeIds: [...state.lockedPath.edgeIds] } : undefined,
+    lockedPath: state.lockedPath ? { ...state.lockedPath, nodeIds: [...state.lockedPath.nodeIds], edgeIds: [...state.lockedPath.edgeIds], evidencePolicy: { ...state.lockedPath.evidencePolicy } } : undefined,
     budget: { ...state.budget },
   };
 }

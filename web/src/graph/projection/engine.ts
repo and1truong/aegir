@@ -19,6 +19,8 @@ export interface ProjectionRequest {
   branchPageSize?: number;
   evidencePolicy?: EvidencePolicy;
   pinnedNodeIds?: string[];
+  requiredNodeIds?: string[];
+  requiredEdgeIds?: string[];
 }
 
 const STRUCTURAL_KINDS = new Set<NodeKind>(['service', 'package']);
@@ -56,8 +58,8 @@ function category(edge: SysEdge, direction: ProjectionDirection) {
   return direction === 'upstream' ? 'upstream dependencies' : 'downstream dependencies';
 }
 
-function explanation(reason: Extract<InclusionReason, { kind: 'root' | 'pin' | 'overview' }>): CandidateExplanation {
-  const contribution = reason.kind === 'root' || reason.kind === 'pin' ? 100 : 10;
+function explanation(reason: Extract<InclusionReason, { kind: 'root' | 'pin' | 'locked-path' | 'overview' }>): CandidateExplanation {
+  const contribution = reason.kind === 'root' || reason.kind === 'pin' || reason.kind === 'locked-path' ? 100 : 10;
   return {
     total: contribution,
     components: [{ signal: reason.kind, raw: contribution, normalized: contribution / 100, weight: 1, contribution, evidenceIds: [] }],
@@ -102,7 +104,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
   const branchPageSize = Math.max(1, request.branchPageSize ?? 8);
   const expansions = request.frontierExpansions ?? {};
   const primaryRoots = request.activeNodeId ? [request.activeNodeId] : (request.rootNodeIds ?? []);
-  const requestedRoots = [...primaryRoots, ...(request.pinnedNodeIds ?? [])];
+  const requestedRoots = [...primaryRoots, ...(request.requiredNodeIds ?? []), ...(request.pinnedNodeIds ?? [])];
   const validRequestedRoots = [...new Set(requestedRoots)].filter((id) => index.nodeById.has(id));
   const roots = validRequestedRoots.slice(0, nodeBudget);
   const warnings: VisibleGraph['warnings'] = [];
@@ -111,6 +113,9 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
   if (definition.evidenceRequirement === 'changes' && !index.nodes.some((node) => node.pr) && !index.edges.some((edge) => edge.pr)) warnings.push({ code: 'missing-evidence', message: 'No graph delta is available in this snapshot context.' });
   if (primaryRoots.some((id) => !index.nodeById.has(id))) warnings.push({ code: 'missing-root', message: 'One or more requested roots are not present in this graph context.' });
   if ((request.pinnedNodeIds ?? []).some((id) => !index.nodeById.has(id))) warnings.push({ code: 'missing-pin', message: 'One or more pinned nodes are not present in this graph context.' });
+  const missingPathNodes = (request.requiredNodeIds ?? []).filter((id) => !index.nodeById.has(id));
+  const missingPathEdges = (request.requiredEdgeIds ?? []).filter((id) => !index.edgeById.has(id));
+  if (missingPathNodes.length || missingPathEdges.length) warnings.push({ code: 'broken-path', message: `Locked path has ${missingPathNodes.length + missingPathEdges.length} missing segment${missingPathNodes.length + missingPathEdges.length === 1 ? '' : 's'} in this context.` });
   if (validRequestedRoots.length > roots.length) warnings.push({ code: 'root-budget', message: `${validRequestedRoots.length - roots.length} roots exceed the real-node budget.` });
   if (roots.length === 0) {
     const result = overview(index, definition, edgeKinds, nodeBudget, evidencePolicy);
@@ -120,7 +125,9 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
   const visible = new Set(roots);
   const retainedContext = new Set<string>();
   const pinned = new Set(request.pinnedNodeIds ?? []);
-  const reasons = new Map<string, InclusionReason>(roots.map((id) => [id, pinned.has(id) && id !== request.activeNodeId ? { kind: 'pin', detail: 'Pinned reference node.' } : { kind: 'root', detail: id === request.activeNodeId ? 'Selected focal node.' : 'Required projection root.' }]));
+  const required = new Set(request.requiredNodeIds ?? []);
+  const requiredEdges = new Set(request.requiredEdgeIds ?? []);
+  const reasons = new Map<string, InclusionReason>(roots.map((id) => [id, required.has(id) ? { kind: 'locked-path', detail: 'Required by the locked semantic path.' } : pinned.has(id) && id !== request.activeNodeId ? { kind: 'pin', detail: 'Pinned reference node.' } : { kind: 'root', detail: id === request.activeNodeId ? 'Selected focal node.' : 'Required projection root.' }]));
   const scores = new Map<string, CandidateExplanation>();
   const frontiers = new Map<string, FrontierGroup>();
   const traversalEdgeIds = new Set<string>();
@@ -223,7 +230,7 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
 
   const realNodes: VisibleNode[] = index.nodes.filter((node) => visible.has(node.id)).map((node) => {
     const reason = reasons.get(node.id) ?? { kind: 'root' as const, detail: 'Required projection root.' };
-    const score = scores.get(node.id) ?? explanation(reason as Extract<InclusionReason, { kind: 'root' | 'pin' | 'overview' }>);
+    const score = scores.get(node.id) ?? explanation(reason as Extract<InclusionReason, { kind: 'root' | 'pin' | 'locked-path' | 'overview' }>);
     return { kind: 'real', id: node.id, node, reason, score };
   });
   const visibleFrontiers = [...frontiers.values()].sort((a, b) => b.aggregateScore - a.aggregateScore || a.id.localeCompare(b.id)).slice(0, Math.max(0, hardBudget - realNodes.length));
@@ -231,16 +238,16 @@ export function projectVisibleGraph(index: GraphIndex, definition: ProjectionDef
   const frontierNodes: VisibleNode[] = visibleFrontiers.map((frontier) => ({ kind: 'frontier', id: frontier.id, frontier, reason: { kind: 'frontier', detail: `Summarizes ${frontier.hiddenCount} hidden ${frontier.category}.` } }));
   const rootSet = new Set(roots);
   const realEdges: VisibleEdge[] = index.edges.flatMap((edge) => {
-    if (!eligible(edge)) return [];
+    if (!eligible(edge) && !requiredEdges.has(edge.id)) return [];
     const endpoints = visualEndpoints(edge, definition);
     const connectsRoots = rootSet.has(endpoints.source) && rootSet.has(endpoints.target);
-    if (!visible.has(endpoints.source) || !visible.has(endpoints.target) || (!traversalEdgeIds.has(edge.id) && !connectsRoots)) return [];
-    const reason = reasons.get(endpoints.target) ?? reasons.get(endpoints.source) ?? { kind: 'root' as const, detail: 'Connects required roots.' };
-    return [{ kind: 'real' as const, id: edge.id, edge, ...endpoints, canonicalEdgeIds: [edge.id], reason, evidenceIds: survivingEvidence.get(edge.id) ?? [] }];
+    if (!visible.has(endpoints.source) || !visible.has(endpoints.target) || (!traversalEdgeIds.has(edge.id) && !connectsRoots && !requiredEdges.has(edge.id))) return [];
+    const reason: InclusionReason = requiredEdges.has(edge.id) ? { kind: 'locked-path', detail: 'Required by the locked semantic path.' } : reasons.get(endpoints.target) ?? reasons.get(endpoints.source) ?? { kind: 'root' as const, detail: 'Connects required roots.' };
+    return [{ kind: 'real' as const, id: edge.id, edge, ...endpoints, canonicalEdgeIds: [edge.id], reason, evidenceIds: survivingEvidence.get(edge.id) ?? [], broken: requiredEdges.has(edge.id) && !eligible(edge) }];
   });
   const frontierEdges: VisibleEdge[] = visibleFrontiers.map((frontier) => ({ kind: 'frontier-link', id: `frontier-link:${frontier.id}`, source: frontier.direction === 'downstream' ? frontier.parentId : frontier.id, target: frontier.direction === 'downstream' ? frontier.id : frontier.parentId, canonicalEdgeIds: [], reason: { kind: 'frontier', detail: `Connects the ${frontier.category} frontier to its parent.` }, evidenceIds: [] }));
   const pruned = Math.max(0, candidateIds.size - realNodes.length);
-  const revisionParts = [definition.id, roots.join(','), `pins:${[...pinned].sort().join(',')}`, request.upstreamDepth ?? definition.defaultDepth.upstream, request.downstreamDepth ?? definition.defaultDepth.downstream, [...edgeKinds].sort().join(','), `${evidencePolicy.maximumLevel}:${evidencePolicy.includeStale}`, Object.entries(expansions).sort().map(([id, pages]) => `${id}=${pages}`).join(',')];
+  const revisionParts = [definition.id, roots.join(','), `pins:${[...pinned].sort().join(',')}`, `path:${[...requiredEdges].join(',')}`, request.upstreamDepth ?? definition.defaultDepth.upstream, request.downstreamDepth ?? definition.defaultDepth.downstream, [...edgeKinds].sort().join(','), `${evidencePolicy.maximumLevel}:${evidencePolicy.includeStale}`, Object.entries(expansions).sort().map(([id, pages]) => `${id}=${pages}`).join(',')];
   return {
     revision: revisionParts.join('|'),
     projectionId: definition.id,

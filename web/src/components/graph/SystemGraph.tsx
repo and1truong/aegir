@@ -9,6 +9,7 @@ import { cn } from '../../utils/cn';
 import type { SysNode, SysEdge, Severity, CoverageStatus, NodeKind } from '../../data/types';
 import { layout } from '../../lib/layout';
 import { KindIcon, CoverageIcon } from '../../product/ui';
+import type { FrontierAggregate } from '../../lib/graphProjection';
 
 // ---------------------------------------------------------------------------
 // Decoration model shared by all graph modes
@@ -46,6 +47,7 @@ export interface GraphDecor {
 export interface SystemGraphProps {
   nodes: SysNode[];
   edges: SysEdge[];
+  frontiers?: FrontierAggregate[];
   decor?: GraphDecor;
   selected?: string;
   onSelect?: (id: string) => void;
@@ -79,12 +81,14 @@ type SysData = {
 };
 type OutcomeData = { label: string; status: CoverageStatus; dimmed?: boolean };
 type BoundaryData = { label: string; kind: GraphGroup['kind'] };
+type FrontierData = { label: string; direction: FrontierAggregate['direction']; hiddenCount: number; selected?: boolean };
 type SysEdgeData = { tone: EdgeTone; width: number; dashed?: boolean; dotted?: boolean; label?: string; dimmed?: boolean; highlighted?: boolean; kind: string };
 
 type SysFlowNode = Node<SysData, 'sys'>;
 type OutcomeFlowNode = Node<OutcomeData, 'outcome'>;
 type BoundaryFlowNode = Node<BoundaryData, 'boundary'>;
-type AnyNode = SysFlowNode | OutcomeFlowNode | BoundaryFlowNode;
+type FrontierFlowNode = Node<FrontierData, 'frontier'>;
+type AnyNode = SysFlowNode | OutcomeFlowNode | BoundaryFlowNode | FrontierFlowNode;
 type SysFlowEdge = Edge<SysEdgeData, 'sys'>;
 
 // ---------------------------------------------------------------------------
@@ -246,6 +250,17 @@ function BoundaryView({ data }: NodeProps<BoundaryFlowNode>) {
   );
 }
 
+function FrontierView({ data }: NodeProps<FrontierFlowNode>) {
+  return (
+    <div className={cn('rounded-md border border-dashed border-sky-700/70 bg-sky-950/30 px-2.5 py-1.5 font-mono text-[10.5px] text-sky-200', data.selected && 'ring-2 ring-sky-400 ring-offset-1 ring-offset-zinc-950')}>
+      <Handle type="target" position={Position.Left} className="opacity-0" />
+      <span>{data.label}</span>
+      <div className="text-[9px] uppercase tracking-wider text-sky-500">{data.direction} frontier</div>
+      <Handle type="source" position={Position.Right} className="opacity-0" />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Edge view
 // ---------------------------------------------------------------------------
@@ -275,7 +290,7 @@ function SysEdgeView({ id, sourceX, sourceY, targetX, targetY, sourcePosition, t
   );
 }
 
-const nodeTypes = { sys: SysNodeView, outcome: OutcomeView, boundary: BoundaryView };
+const nodeTypes = { sys: SysNodeView, outcome: OutcomeView, boundary: BoundaryView, frontier: FrontierView };
 const edgeTypes = { sys: SysEdgeView };
 
 // ---------------------------------------------------------------------------
@@ -295,7 +310,7 @@ function nodeSize(n: SysNode, label: string, sub: string | undefined, metrics: s
 const kindOrder: Record<NodeKind, number> = { endpoint: 0, function: 1, method: 1, transaction: 1, service: 2, package: 3, table: 4, cache: 4, topic: 5, external: 6, contract: 7, test: 8, database: 9, broker: 9 };
 
 function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[] } {
-  const { nodes, edges, decor = {}, selected, compact = false, onMarkerClick } = props;
+  const { nodes, edges, frontiers = [], decor = {}, selected, compact = false, onMarkerClick } = props;
   const items: { id: string; width: number; height: number }[] = [];
   const flowNodes: AnyNode[] = [];
   const meta = new Map<string, { width: number; height: number }>();
@@ -337,6 +352,24 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
       data: { tone: tone in edgeColor ? tone : 'default', width, dashed, dotted, label: decor.edgeLabel?.[e.id], dimmed: decor.edgeDimmed?.has(e.id), highlighted, kind: e.kind },
     };
   });
+
+  for (const frontier of frontiers) {
+    const width = Math.max(130, frontier.label.length * 6.3 + 32);
+    const height = 42;
+    items.push({ id: frontier.nodeId, width, height });
+    flowNodes.push({ id: frontier.nodeId, type: 'frontier', position: { x: 0, y: 0 }, draggable: false, data: { label: frontier.label, direction: frontier.direction, hiddenCount: frontier.hiddenCount, selected: selected === frontier.nodeId } });
+    const source = frontier.direction === 'downstream' ? frontier.parentId : frontier.nodeId;
+    const target = frontier.direction === 'downstream' ? frontier.nodeId : frontier.parentId;
+    links.push({ source, target });
+    flowEdges.push({
+      id: `frontier-link:${frontier.branchKey}`,
+      source,
+      target,
+      type: 'sys',
+      markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor.transitive, width: 12, height: 12 },
+      data: { tone: 'transitive', width: 1.2, dashed: true, label: 'expand', kind: 'frontier-link' },
+    });
+  }
 
   // outcome pseudo nodes (coverage)
   if (decor.outcomes) {

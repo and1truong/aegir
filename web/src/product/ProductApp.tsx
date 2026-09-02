@@ -10,9 +10,10 @@ import { Badge, Btn, KindIcon, SeverityBadge } from './ui';
 import { cn } from '../utils/cn';
 import { useProduct } from './ProductContext';
 import { GraphScopeControls, type ExpandedBranch } from './GraphScopeControls';
-import { isAggregateNode, projectGraph, projectPRGraph, type BranchExpansions } from '../lib/graphProjection';
+import { projectGraphIndex, projectPRGraphIndex, type BranchExpansions } from '../lib/graphProjection';
 import { useInvestigation } from '../investigation/InvestigationContext';
 import { enabledRelationships as deriveEnabledRelationships, legacyBranchExpansions } from '../investigation/reducer';
+import { createGraphIndex } from '../graph/index';
 
 type Screen = 'overview' | 'explorer' | 'pulls' | 'rules' | 'search' | 'settings';
 type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint';
@@ -119,36 +120,27 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
   const branchExpansions = useMemo(() => legacyBranchExpansions(investigation), [investigation]);
   const [query, setQuery] = useState('');
   const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [impact, setImpact] = useState<{ root?: string; nodes: SysNode[]; edges: SysEdge[]; hops: Record<string, number> }>();
   const [contractDiff, setContractDiff] = useState<ContractDiff>();
   const nodes = snapshot?.nodes ?? [];
   const edges = snapshot?.edges ?? [];
+  const graphIndex = useMemo(() => createGraphIndex(nodes, edges), [nodes, edges]);
 
   useEffect(() => {
     dispatch({ type: 'resetContext', contextKey: `snapshot:${active?.id ?? 'none'}:${snapshot?.id ?? 'none'}`, projectionId: 'dependencies' });
-    setImpact(undefined);
     setContractDiff(undefined);
   }, [active?.id, snapshot?.id, dispatch]);
   useEffect(() => {
     if (selected && !nodes.some((node) => node.id === selected)) dispatch({ type: 'setFocalNode', nodeId: undefined });
   }, [nodes, selected, dispatch]);
   useEffect(() => {
-    if (mode !== 'impact' || !selected || !active) return;
-    fetch(`/api/repositories/${active.id}/impact?nodeId=${encodeURIComponent(selected)}&depth=4`)
-      .then((response) => response.json())
-      .then(setImpact);
-  }, [mode, selected, active]);
-  useEffect(() => {
     if (mode !== 'contracts' || !active) return;
     fetch(`/api/repositories/${active.id}/contracts/diff`).then((response) => response.json()).then(setContractDiff);
   }, [mode, active, snapshot?.id]);
 
-  const activeImpact = mode === 'impact' && impact?.root === selected ? impact : undefined;
-  const sourceNodes = activeImpact?.nodes ?? nodes;
-  const sourceEdges = activeImpact?.edges ?? edges;
   const violations = snapshot?.analysis.violations ?? [];
   const lintRoots = mode === 'lint' && !selected ? [...new Set(violations.flatMap((violation) => violation.path.length ? violation.path : [violation.primaryNode]))] : undefined;
-  const graph = useMemo(() => projectGraph(sourceNodes, sourceEdges, {
+  const graph = useMemo(() => projectGraphIndex(graphIndex, {
+    projectionId: mode,
     activeNodeId: selected,
     rootNodeIds: lintRoots,
     upstreamDepth,
@@ -156,7 +148,7 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
     edgeKinds: enabledRelationships,
     branchExpansions,
     nodeBudget: 30,
-  }), [sourceNodes, sourceEdges, selected, lintRoots, upstreamDepth, downstreamDepth, enabledRelationships, branchExpansions]);
+  }), [graphIndex, mode, selected, lintRoots, upstreamDepth, downstreamDepth, enabledRelationships, branchExpansions]);
   const coverage = useMemo(() => new Map(snapshot?.analysis.coverage.map((item) => [item.nodeId, item]) ?? []), [snapshot]);
   const complexity = useMemo(() => new Map((snapshot?.analysis.complexity ?? []).map((item) => [item.nodeId, item])), [snapshot]);
   const telemetry = useMemo(() => new Map((snapshot?.analysis.telemetry ?? []).map((item) => [item.nodeId, item])), [snapshot]);
@@ -164,11 +156,6 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
     const value: GraphDecor = { tone: {}, badges: {}, sub: {}, markers: {}, heat: {}, metrics: {} };
     if (selected) value.dimmed = new Set([...graph.retainedContext].filter((id) => id !== selected));
     for (const node of graph.nodes) {
-      if (isAggregateNode(node.id)) {
-        value.tone![node.id] = 'transitive';
-        value.badges![node.id] = [{ text: 'EXPAND', tone: 'blue' }];
-        continue;
-      }
       if (node.file) value.sub![node.id] = node.file;
       if (mode === 'coverage') {
         const item = coverage.get(node.id);
@@ -207,8 +194,9 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
           value.metrics![node.id] = [item.rpm ? `${item.rpm.toLocaleString()} rpm` : '', item.qps ? `${item.qps.toLocaleString()} qps` : '', item.p99 ? `p99 ${item.p99}ms` : '', item.errorRate !== undefined ? `${item.errorRate}% errors` : ''].filter(Boolean);
         }
       }
-      if (mode === 'impact' && impact) {
-        const hop = impact.hops[node.id];
+      if (mode === 'impact') {
+        const visibleNode = graph.visibleGraph.nodes.find((item) => item.kind === 'real' && item.id === node.id);
+        const hop = visibleNode?.reason.kind === 'traversal' ? visibleNode.reason.semanticDepth : 0;
         value.tone![node.id] = hop === 0 ? 'root' : hop === 1 ? 'direct' : 'transitive';
         value.badges![node.id] = [{ text: hop === 0 ? 'ROOT' : `HOP ${hop}`, tone: hop === 0 ? 'amber' : 'blue' }];
       }
@@ -221,7 +209,7 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
       }
     }
     return value;
-  }, [graph.nodes, graph.edges, mode, impact, coverage, complexity, telemetry, violations, snapshot, contractDiff]);
+  }, [graph.nodes, graph.edges, graph.visibleGraph.nodes, mode, coverage, complexity, telemetry, violations, snapshot, contractDiff]);
 
   const selectedNode = nodes.find((node) => node.id === selected);
   const modeNodes = mode === 'contracts' ? nodes.filter((node) => node.kind === 'contract') : mode === 'lint' ? nodes.filter((node) => violations.some((violation) => violation.primaryNode === node.id || violation.path.includes(node.id))) : nodes;
@@ -253,9 +241,9 @@ function Explorer({ theme, focusMode, setFocusMode, railOpen }: GraphViewProps) 
           <div className="border-b border-zinc-800 p-2"><div className="flex h-7 items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950 px-2"><Search className="h-3.5 w-3.5 text-zinc-600" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter symbols…" className="w-full bg-transparent font-mono text-[11px] outline-none" /></div></div>
           <div className="min-h-0 flex-1 overflow-y-auto py-1">{filtered.map((node) => <button key={node.id} onClick={() => dispatch({ type: 'setFocalNode', nodeId: node.id })} className={cn('flex w-full items-center gap-2 px-2 py-1 text-left', selected === node.id ? 'bg-sky-500/10 text-sky-100' : 'text-zinc-300 hover:bg-zinc-900')}><KindIcon kind={node.kind} /><span className="min-w-0 flex-1 truncate font-mono text-[10.5px]">{node.label}</span></button>)}</div>
         </aside>}
-        <main className="relative min-w-0 flex-1"><SystemGraph nodes={graph.nodes} edges={graph.edges} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={`${mode}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</main>
+        <main className="relative min-w-0 flex-1"><SystemGraph nodes={graph.nodes} edges={graph.edges} frontiers={graph.aggregates} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={`${mode}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</main>
         {!focusMode && inspectorOpen && <aside className="w-[310px] shrink-0 overflow-y-auto border-l border-zinc-800 p-3">
-          {selectedNode ? <><div className="flex items-center gap-2"><KindIcon kind={selectedNode.kind} /><Badge>{selectedNode.kind}</Badge></div><h2 className="mt-2 break-words font-mono text-[13px] text-zinc-50">{selectedNode.label}</h2><div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{selectedNode.file}</div>{mode === 'coverage' && coverage.get(selectedNode.id) && <div className="mt-4 rounded-md border border-zinc-800 p-2"><div className="font-mono text-[18px] text-zinc-100">{coverage.get(selectedNode.id)?.line ?? '—'}%</div><div className="mt-1 text-[10px] text-zinc-500">{coverage.get(selectedNode.id)?.note}</div></div>}{mode === 'complexity' && complexity.get(selectedNode.id) && <ComplexityInspector item={complexity.get(selectedNode.id)!} />}{mode === 'runtime' && telemetry.get(selectedNode.id) && <RuntimeInspector item={telemetry.get(selectedNode.id)!} />}{mode === 'contracts' ? <ContractInspector diff={contractDiff} contractID={selectedNode.id} /> : <div className="mt-4 border-t border-zinc-800 pt-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationships in scope</div>{graph.edges.filter((edge) => !isAggregateNode(edge.source) && !isAggregateNode(edge.target) && (edge.source === selected || edge.target === selected)).slice(0, 30).map((edge) => { const other = nodes.find((node) => node.id === (edge.source === selected ? edge.target : edge.source)); return <button key={edge.id} onClick={() => other && dispatch({ type: 'setFocalNode', nodeId: other.id })} className="mt-1 flex w-full items-center gap-2 text-left text-[10.5px] text-zinc-300 hover:text-sky-200"><Badge>{edge.kind}</Badge><span className="truncate font-mono">{other?.label}</span></button> })}</div>}</> : <div className="text-zinc-500">Select a node.</div>}
+          {selectedNode ? <><div className="flex items-center gap-2"><KindIcon kind={selectedNode.kind} /><Badge>{selectedNode.kind}</Badge></div><h2 className="mt-2 break-words font-mono text-[13px] text-zinc-50">{selectedNode.label}</h2><div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{selectedNode.file}</div>{mode === 'coverage' && coverage.get(selectedNode.id) && <div className="mt-4 rounded-md border border-zinc-800 p-2"><div className="font-mono text-[18px] text-zinc-100">{coverage.get(selectedNode.id)?.line ?? '—'}%</div><div className="mt-1 text-[10px] text-zinc-500">{coverage.get(selectedNode.id)?.note}</div></div>}{mode === 'complexity' && complexity.get(selectedNode.id) && <ComplexityInspector item={complexity.get(selectedNode.id)!} />}{mode === 'runtime' && telemetry.get(selectedNode.id) && <RuntimeInspector item={telemetry.get(selectedNode.id)!} />}{mode === 'contracts' ? <ContractInspector diff={contractDiff} contractID={selectedNode.id} /> : <div className="mt-4 border-t border-zinc-800 pt-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationships in scope</div>{graph.edges.filter((edge) => edge.source === selected || edge.target === selected).slice(0, 30).map((edge) => { const other = nodes.find((node) => node.id === (edge.source === selected ? edge.target : edge.source)); return <button key={edge.id} onClick={() => other && dispatch({ type: 'setFocalNode', nodeId: other.id })} className="mt-1 flex w-full items-center gap-2 text-left text-[10.5px] text-zinc-300 hover:text-sky-200"><Badge>{edge.kind}</Badge><span className="truncate font-mono">{other?.label}</span></button> })}</div>}</> : <div className="text-zinc-500">Select a node.</div>}
         </aside>}
       </div>
     </div>
@@ -324,6 +312,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode, railOpen }: GraphViewPro
   const [baseRef, setBaseRef] = useState('main');
   const [headRef, setHeadRef] = useState('WORKTREE');
   const [review, setReview] = useState<LocalReview>();
+  const reviewIndex = useMemo(() => createGraphIndex(review?.nodes ?? [], review?.edges ?? []), [review]);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -354,11 +343,10 @@ function ReviewScreen({ theme, focusMode, setFocusMode, railOpen }: GraphViewPro
     finally { setLoading(false) }
   };
   if (!review) return <div className="flex h-full items-center justify-center p-6"><div className="w-full max-w-[580px] rounded-lg border border-zinc-800 bg-zinc-900/30 p-5"><GitCompare className="h-6 w-6 text-violet-300" /><h1 className="mt-3 text-[16px] font-semibold">Review local Git changes</h1><p className="mt-1 text-[11px] text-zinc-500">Aegir archives the base ref read-only, compares it with another ref or the current working tree, and persists an evidence-backed graph review.</p><ReviewForm baseRef={baseRef} headRef={headRef} setBaseRef={setBaseRef} setHeadRef={setHeadRef} run={run} loading={loading} /><>{error && <div className="mt-3 text-[11px] text-red-300">{error}</div>}</></div></div>;
-  const graph = projectPRGraph(review.nodes, review.edges, { activeNodeId: selected, upstreamDepth, downstreamDepth, edgeKinds: enabledRelationships, branchExpansions, nodeBudget: 30 });
+  const graph = projectPRGraphIndex(reviewIndex, { projectionId: 'review', activeNodeId: selected, upstreamDepth, downstreamDepth, edgeKinds: enabledRelationships, branchExpansions, nodeBudget: 30 });
   const decor: GraphDecor = { tone: {}, badges: {}, edgeTone: {}, edgeLabel: {} };
   for (const node of review.nodes) if (node.pr) { decor.tone![node.id] = node.pr; decor.badges![node.id] = [{ text: node.pr.toUpperCase(), tone: node.pr === 'added' ? 'green' : node.pr === 'removed' ? 'red' : 'blue' }] }
   for (const edge of review.edges) if (edge.pr === 'added' || edge.pr === 'removed') { decor.edgeTone![edge.id] = edge.pr; decor.edgeLabel![edge.id] = edge.pr.toUpperCase() }
-  for (const aggregate of graph.aggregates) { decor.tone![aggregate.nodeId] = 'transitive'; decor.badges![aggregate.nodeId] = [{ text: 'EXPAND', tone: 'blue' }] }
   const selectGraphNode = (id: string) => {
     const aggregate = graph.aggregates.find((item) => item.nodeId === id);
     if (aggregate) {
@@ -385,7 +373,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode, railOpen }: GraphViewPro
       </header>}
       {!focusMode && <GraphScopeControls upstream={upstreamDepth} downstream={downstreamDepth} setUpstream={(depth) => dispatch({ type: 'setDepth', direction: 'upstream', depth })} setDownstream={(depth) => dispatch({ type: 'setDepth', direction: 'downstream', depth })} relationships={MODE_RELATIONSHIPS.impact} enabledRelationships={enabledRelationships} toggleRelationship={toggleRelationship} expandedBranches={expandedBranchLabels(branchExpansions, review.nodes)} collapseBranch={(key) => dispatch({ type: 'collapseFrontier', frontierId: key })} />}
       <div className={cn('grid min-h-0 flex-1', !focusMode && inspectorOpen ? 'grid-cols-[1fr_360px]' : 'grid-cols-1')}>
-        <div className="relative min-w-0"><SystemGraph nodes={graph.nodes} edges={graph.edges} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={`${review.id}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</div>
+        <div className="relative min-w-0"><SystemGraph nodes={graph.nodes} edges={graph.edges} frontiers={graph.aggregates} decor={decor} selected={selected} onSelect={selectGraphNode} onDoubleClick={selectGraphNode} fitKey={`${review.id}:${focusMode}:${inspectorOpen}:${railOpen}`} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</div>
         {!focusMode && inspectorOpen && <aside className="overflow-y-auto border-l border-zinc-800"><div className="border-b border-zinc-800 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Review findings</div>{review.newViolations.map((violation) => <div key={violation.id} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone="red">NEW</Badge><span className="font-mono text-[10px] text-zinc-500">{violation.ruleId}</span></div><div className="mt-1 text-[11px] text-zinc-200">{violation.title}</div><div className="mt-1 text-[10px] text-zinc-500">{violation.detail}</div></div>)}{review.contractDiff.changes.map((change) => <div key={change.contractId} className="border-b border-zinc-800 p-3"><div className="flex items-center gap-2"><Badge tone={change.compatibility === 'break' ? 'red' : change.compatibility === 'potential' ? 'orange' : 'green'}>{change.compatibility.toUpperCase()}</Badge><span className="text-[11px] text-zinc-200">{change.name}</span></div><div className="mt-1 text-[10px] text-zinc-500">{change.fields.length} semantic field changes</div></div>)}{review.newViolations.length === 0 && review.contractDiff.changes.length === 0 && <div className="p-4 text-[11px] text-zinc-500">No new deterministic findings or contract changes.</div>}</aside>}
       </div>
     </div>

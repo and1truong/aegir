@@ -372,6 +372,9 @@ func nodeMap(values []analyzer.Node) map[string]analyzer.Node {
 func edgeMap(values []analyzer.Edge) map[string]analyzer.Edge {
 	out := map[string]analyzer.Edge{}
 	for _, value := range values {
+		if value.EvidenceRefs == nil {
+			value.EvidenceRefs = []string{}
+		}
 		out[value.ID] = value
 	}
 	return out

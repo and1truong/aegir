@@ -21,7 +21,7 @@ export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysE
   for (const edge of edges) {
     if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) continue;
     const evidenceSubject = `edge:${edge.id}`;
-    if (edge.evidenceRefs !== undefined) {
+    if (Array.isArray(edge.evidenceRefs)) {
       evidenceBySubject.set(evidenceSubject, edge.evidenceRefs.filter((id) => evidenceById.has(id)));
     }
     edgeById.set(edge.id, edge);
@@ -29,7 +29,7 @@ export function createGraphIndex(nodes: readonly SysNode[], edges: readonly SysE
     append(incomingByNode, edge.target, edge.id);
     append(adjacentByNode, edge.source, edge.id);
     if (edge.target !== edge.source) append(adjacentByNode, edge.target, edge.id);
-    if (edge.evidenceRefs === undefined && (evidenceBySubject.get(evidenceSubject)?.length ?? 0) === 0) {
+    if (!Array.isArray(edge.evidenceRefs) && (evidenceBySubject.get(evidenceSubject)?.length ?? 0) === 0) {
       const id = `legacy:${edge.id}`;
       const fallback: EvidenceRecord = { id, source: 'INFERRED', strength: 'inferred', subject: { kind: 'edge', id: edge.id }, summary: edge.label ? `Legacy relationship: ${edge.label}` : 'Legacy relationship; re-index for exact source evidence.' };
       evidenceById.set(id, fallback);

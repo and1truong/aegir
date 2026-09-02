@@ -35,3 +35,12 @@ test('reconstructs base and head views from typed before and after bodies', () =
   assert.deepEqual(graphForReviewSnapshot({ nodes, edges }, delta, 'head').nodes.find((node) => node.id === 'a')?.label, 'After');
   assert.equal(graphForReviewSnapshot({ nodes, edges }, delta, 'head').edges.some((edge) => edge.id === edges[0].id), true);
 });
+
+test('keeps legacy modified bodies when the base side was not retained', () => {
+  const legacyNodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A', pr: 'modified' }, { id: 'b', kind: 'function', label: 'B' }];
+  const legacyEdges: SysEdge[] = [{ id: 'a|calls|b', source: 'a', target: 'b', kind: 'calls', pr: 'modified' }];
+  const review = { nodes: legacyNodes, edges: legacyEdges };
+  const graph = graphForReviewSnapshot(review, adaptGraphDelta(review), 'base');
+  assert.deepEqual(graph.nodes.map((node) => node.id), ['a', 'b']);
+  assert.deepEqual(graph.edges.map((edge) => edge.id), ['a|calls|b']);
+});

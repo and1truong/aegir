@@ -77,12 +77,14 @@ export function graphForReviewSnapshot(review: DeltaReviewLike, delta: GraphDelt
   const edgeDelta = new Map(delta.edges.map((entry) => [entry.id, entry]));
   const nodes = review.nodes.flatMap((node) => {
     const entry = nodeDelta.get(node.id);
-    const body = entry ? (side === 'base' ? entry.before : entry.after) : node;
+    const selected = entry ? (side === 'base' ? entry.before : entry.after) : node;
+    const body = selected ?? (entry?.status === 'modified' ? node : undefined);
     return body ? [{ ...body, pr: undefined }] : [];
   });
   const edges = review.edges.flatMap((edge) => {
     const entry = edgeDelta.get(edge.id);
-    const body = entry ? (side === 'base' ? entry.before : entry.after) : edge;
+    const selected = entry ? (side === 'base' ? entry.before : entry.after) : edge;
+    const body = selected ?? (entry?.status === 'modified' ? edge : undefined);
     return body ? [{ ...body, pr: undefined }] : [];
   });
   return {

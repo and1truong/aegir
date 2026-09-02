@@ -74,7 +74,7 @@ export interface SysEdge {
   tx?: string;
   pr?: PRChange;
   sync?: boolean;
-  evidenceRefs?: string[];
+  evidenceRefs?: string[] | null;
   canonicalEdgeIds?: string[];
   underlyingCount?: number;
 }

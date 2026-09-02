@@ -27,6 +27,15 @@ test('excludes subject evidence not declared by the current edge body', () => {
   assert.deepEqual(found.map((record) => record.id), ['current']);
 });
 
+test('preserves explicit empty evidence refs while legacy null uses subject fallback', () => {
+  const nodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A' }, { id: 'b', kind: 'function', label: 'B' }];
+  const record: EvidenceRecord = { id: 'historical', source: 'CODE', strength: 'proven', subject: { kind: 'edge', id: 'call' }, summary: 'removed call site' };
+  const current: SysEdge = { id: 'call', source: 'a', target: 'b', kind: 'calls', evidenceRefs: [] };
+  const legacy: SysEdge = { ...current, evidenceRefs: null };
+  assert.deepEqual(evidenceForEdge(createGraphIndex(nodes, [current], [record]), current), []);
+  assert.deepEqual(evidenceForEdge(createGraphIndex(nodes, [legacy], [record]), legacy).map((item) => item.id), ['historical']);
+});
+
 test('provides explicit legacy evidence instead of an empty explanation', () => {
   const nodes: SysNode[] = [{ id: 'a', kind: 'function', label: 'A' }, { id: 'b', kind: 'function', label: 'B' }];
   const edge: SysEdge = { id: 'call', source: 'a', target: 'b', kind: 'calls' };

@@ -40,7 +40,7 @@ type Edge struct {
 	Boundary     string   `json:"boundary,omitempty"`
 	Synchronous  bool     `json:"sync,omitempty"`
 	Change       string   `json:"pr,omitempty"`
-	EvidenceRefs []string `json:"evidenceRefs,omitempty"`
+	EvidenceRefs []string `json:"evidenceRefs"`
 }
 
 type EvidenceSubject struct {

@@ -1,6 +1,7 @@
 package review
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/and1truong/aegir/internal/analyzer"
@@ -41,6 +42,35 @@ func TestCompareMarksEvidenceOnlyEdgeChanges(t *testing.T) {
 	}
 	if result.Delta.Edges[0].ChangeReasons[0].Kind != "evidence-changed" {
 		t.Fatalf("expected typed evidence reason, got %#v", result.Delta.Edges[0].ChangeReasons)
+	}
+}
+
+func TestCompareSerializesExplicitEmptyEvidenceRefs(t *testing.T) {
+	nodes := []analyzer.Node{{ID: "a", Kind: "function", Label: "A"}, {ID: "b", Kind: "function", Label: "B"}}
+	baseEdge := analyzer.Edge{ID: "a|calls|b", Source: "a", Target: "b", Kind: "calls", EvidenceRefs: []string{"old"}}
+	headEdge := analyzer.Edge{ID: baseEdge.ID, Source: "a", Target: "b", Kind: "calls"}
+	result := Compare("repo", "base", "head", 1, 2, analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{baseEdge}}, analyzer.Snapshot{Nodes: nodes, Edges: []analyzer.Edge{headEdge}})
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded struct {
+		Edges []struct {
+			EvidenceRefs json.RawMessage `json:"evidenceRefs"`
+		} `json:"edges"`
+		Delta struct {
+			Edges []struct {
+				After struct {
+					EvidenceRefs json.RawMessage `json:"evidenceRefs"`
+				} `json:"after"`
+			} `json:"edges"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal(payload, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded.Edges) != 1 || string(encoded.Edges[0].EvidenceRefs) != "[]" || len(encoded.Delta.Edges) != 1 || string(encoded.Delta.Edges[0].After.EvidenceRefs) != "[]" {
+		t.Fatalf("expected explicit empty evidence refs in v2 review payload: %s", payload)
 	}
 }
 

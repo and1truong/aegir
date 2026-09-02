@@ -500,6 +500,9 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [baseRef, setBaseRef] = useState('main');
   const [headRef, setHeadRef] = useState('WORKTREE');
   const [review, setReview] = useState<LocalReview>();
+  const reviewRequest = useRef(0);
+  const reviewRepository = useRef(active?.id);
+  reviewRepository.current = active?.id;
   const [reviewSnapshots, setReviewSnapshots] = useState<{ base?: ProductSnapshot; head?: ProductSnapshot }>({});
   const [reviewSnapshotErrors, setReviewSnapshotErrors] = useState<{ base?: string; head?: string }>({});
   const reviewSnapshotRequests = useRef({ base: 0, head: 0 });
@@ -554,37 +557,41 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
-  const syncTimeline = async () => {
-    setTimelineError(undefined);
+  const syncTimeline = async (shouldApply = () => true) => {
+    if (shouldApply()) setTimelineError(undefined);
     try { await refreshTimeline() }
-    catch (cause) { setTimelineError(cause instanceof Error ? cause.message : String(cause)) }
+    catch (cause) { if (shouldApply()) setTimelineError(cause instanceof Error ? cause.message : String(cause)) }
   };
   useEffect(() => {
+    const request = ++reviewRequest.current;
     setReview(undefined);
+    setLoading(false); setError(undefined);
     if (!active) return;
-    let current = true;
     fetch(`/api/repositories/${active.id}/reviews/latest`)
       .then((response) => response.ok ? response.json() : undefined)
-      .then((value) => { if (current && value) setReview(value) });
-    return () => { current = false };
+      .then((value) => { if (request === reviewRequest.current && value) setReview(value) })
+      .catch((cause) => { if (request === reviewRequest.current) setError(cause instanceof Error ? cause.message : String(cause)) });
   }, [active?.id]);
   useEffect(() => {
     if (review) dispatch({ type: 'resetContext', contextKey: `review:${active?.id ?? 'none'}:${review.id}`, projectionId: 'impact' });
   }, [active?.id, review?.id, dispatch]);
   const run = async () => {
     if (!active) return;
+    const repositoryID = active.id;
+    const request = ++reviewRequest.current;
     setLoading(true); setError(undefined);
     try {
-      const response = await fetch(`/api/repositories/${active.id}/reviews`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseRef, headRef }) });
+      const response = await fetch(`/api/repositories/${repositoryID}/reviews`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseRef, headRef }) });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? 'Review failed');
+      if (request !== reviewRequest.current || reviewRepository.current !== repositoryID) return;
       setReview(body);
       dispatch({ type: 'setProjection', projectionId: 'impact' });
       dispatch({ type: 'setFocalNode', nodeId: undefined });
       dispatch({ type: 'clearRelationshipOverrides' });
-      await syncTimeline();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setLoading(false) }
+      await syncTimeline(() => request === reviewRequest.current && reviewRepository.current === repositoryID);
+    } catch (cause) { if (request === reviewRequest.current && reviewRepository.current === repositoryID) setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { if (request === reviewRequest.current && reviewRepository.current === repositoryID) setLoading(false) }
   };
   const archivedRoots = reviewSnapshotSide === 'delta' ? undefined : [...new Set([...delta.nodes.map((entry) => entry.id), ...delta.edges.flatMap((entry) => [entry.before ?? entry.after].flatMap((edge) => edge ? [edge.source, edge.target] : []))].flatMap((id) => reviewAbstractionGraph.canonicalToRepresentative.get(id) ?? []))];
   const graph = projectPRGraphIndex(reviewIndex, { projectionId: 'review', activeNodeId: reviewPolicy === 'blast-radius' ? reviewProjectedSelected : undefined, rootNodeIds: archivedRoots, upstreamDepth, downstreamDepth, edgeKinds: enabledRelationships, branchExpansions, nodeBudget: 30, evidencePolicy: investigation.evidencePolicy, pinnedNodeIds: reviewProjectedPins });
@@ -684,7 +691,7 @@ function AbstractionShortcutController({ enabled }: { enabled: boolean }) {
 }
 
 export function ProductApp() {
-  const { repositories, active, snapshot, repositorySyncError, timelineSyncError, loading, error, selectRepository, refreshRepositories, refreshTimeline } = useProduct();
+  const { repositories, active, snapshot, snapshotError, repositorySyncError, timelineSyncError, loading, error, selectRepository, selectSnapshot, refreshRepositories, refreshTimeline } = useProduct();
   const [theme, setTheme] = useState<'light' | 'dark'>(() => window.localStorage.getItem('aegir-theme') === 'light' ? 'light' : 'dark');
   const [screen, setScreen] = useState<Screen>('overview');
   const [railOpen, setRailOpen] = useState(true);
@@ -712,7 +719,7 @@ export function ProductApp() {
         <div className="mt-auto border-t border-zinc-800 p-2"><button onClick={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-zinc-500 hover:bg-zinc-900">{theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}{theme === 'dark' ? 'Light' : 'Dark'} theme</button></div>
       </aside>}
       <div className="relative min-w-0 flex-1">
-        {(repositorySyncError || timelineSyncError) && <div className="absolute right-3 top-3 z-50 rounded-md border border-amber-900/60 bg-zinc-950/95 px-3 py-2 text-[10px] text-amber-200">{repositorySyncError && <div>Re-indexed, but repository sync failed: {repositorySyncError} <button type="button" onClick={() => void refreshRepositories().catch(() => {})} className="ml-1 underline">Retry</button></div>}{timelineSyncError && <div>Re-indexed, but timeline sync failed: {timelineSyncError} <button type="button" onClick={() => void refreshTimeline().catch(() => {})} className="ml-1 underline">Retry</button></div>}</div>}
+        {(snapshotError || repositorySyncError || timelineSyncError) && <div className="absolute right-3 top-3 z-50 rounded-md border border-amber-900/60 bg-zinc-950/95 px-3 py-2 text-[10px] text-amber-200">{snapshotError && <div>Snapshot {snapshotError.snapshotId} failed to load: {snapshotError.message} <button type="button" onClick={() => void selectSnapshot(snapshotError.snapshotId)} className="ml-1 underline">Retry</button></div>}{repositorySyncError && <div>Re-indexed, but repository sync failed: {repositorySyncError} <button type="button" onClick={() => void refreshRepositories().catch(() => {})} className="ml-1 underline">Retry</button></div>}{timelineSyncError && <div>Re-indexed, but timeline sync failed: {timelineSyncError} <button type="button" onClick={() => void refreshTimeline().catch(() => {})} className="ml-1 underline">Retry</button></div>}</div>}
         {!railOpen && !focusMode && <button onClick={() => setRailOpen(true)} aria-label="Show navigation rail" title="Show navigation rail" className="absolute bottom-3 left-3 z-50 rounded-md border border-zinc-700 bg-zinc-950/90 p-2 text-zinc-400 shadow-lg hover:bg-zinc-800 hover:text-zinc-100"><PanelLeftOpen className="h-4 w-4" /></button>}
         {loading && !snapshot ? <div className="flex h-full items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-sky-300" /></div> : error ? <div className="p-5 text-red-300">{error}</div> : screen === 'overview' ? <Overview openExplorer={() => setScreen('explorer')} /> : screen === 'explorer' ? <Explorer {...graphViewProps} /> : screen === 'rules' ? <RulesScreen /> : screen === 'search' ? <SearchScreen /> : screen === 'settings' ? <SettingsScreen /> : <ReviewScreen {...graphViewProps} />}
       </div>

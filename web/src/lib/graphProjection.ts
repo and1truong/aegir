@@ -187,8 +187,11 @@ export function projectGraph(nodes: SysNode[], edges: SysEdge[], options: GraphP
   walk('downstream', options.downstreamDepth ?? 2, nodeBudget);
 
   const realNodes = nodes.filter((node) => visible.has(node.id));
-  const aggregateNodes: SysNode[] = [...aggregates.values()]
+  const visibleNodeLimit = Math.max(nodeBudget, 40);
+  const visibleAggregates = [...aggregates.values()]
     .sort((a, b) => a.branchKey.localeCompare(b.branchKey))
+    .slice(0, Math.max(0, visibleNodeLimit - realNodes.length));
+  const aggregateNodes: SysNode[] = visibleAggregates
     .map((aggregate) => ({
       id: aggregate.nodeId,
       kind: 'service',
@@ -203,7 +206,7 @@ export function projectGraph(nodes: SysNode[], edges: SysEdge[], options: GraphP
     const connectsRoots = rootSet.has(endpoints.source) && rootSet.has(endpoints.target);
     return allowedKinds.has(edge.kind) && visible.has(endpoints.source) && visible.has(endpoints.target) && (traversalEdgeIds.has(edge.id) || connectsRoots);
   });
-  const aggregateEdges: SysEdge[] = [...aggregates.values()].map((aggregate) => ({
+  const aggregateEdges: SysEdge[] = visibleAggregates.map((aggregate) => ({
     id: `edge:${aggregate.nodeId}`,
     source: aggregate.direction === 'downstream' ? aggregate.parentId : aggregate.nodeId,
     target: aggregate.direction === 'downstream' ? aggregate.nodeId : aggregate.parentId,
@@ -214,7 +217,7 @@ export function projectGraph(nodes: SysNode[], edges: SysEdge[], options: GraphP
   return {
     nodes: [...realNodes, ...aggregateNodes].filter((node) => visibleWithAggregates.has(node.id)),
     edges: [...realEdges, ...aggregateEdges],
-    aggregates: [...aggregates.values()],
+    aggregates: visibleAggregates,
     rootNodeIds: roots,
     retainedContext,
   };

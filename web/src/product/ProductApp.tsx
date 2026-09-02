@@ -110,6 +110,12 @@ function Explorer({ theme }: { theme: 'light' | 'dark' }) {
   const nodes = snapshot?.nodes ?? [];
   const edges = snapshot?.edges ?? [];
 
+  useEffect(() => {
+    setSelected(undefined);
+    setBranchExpansions({});
+    setImpact(undefined);
+    setContractDiff(undefined);
+  }, [active?.id]);
   useEffect(() => { if (selected && !nodes.some((node) => node.id === selected)) setSelected(undefined) }, [nodes, selected]);
   useEffect(() => {
     setEnabledRelationships(new Set(MODE_RELATIONSHIPS[mode]));
@@ -305,9 +311,16 @@ function ReviewScreen({ theme }: { theme: 'light' | 'dark' }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => {
+    setReview(undefined);
+    setSelected(undefined);
+    setBranchExpansions({});
     if (!active) return;
-    fetch(`/api/repositories/${active.id}/reviews/latest`).then((response) => response.ok ? response.json() : undefined).then((value) => value && setReview(value));
-  }, [active]);
+    let current = true;
+    fetch(`/api/repositories/${active.id}/reviews/latest`)
+      .then((response) => response.ok ? response.json() : undefined)
+      .then((value) => { if (current && value) setReview(value) });
+    return () => { current = false };
+  }, [active?.id]);
   const run = async () => {
     if (!active) return;
     setLoading(true); setError(undefined);

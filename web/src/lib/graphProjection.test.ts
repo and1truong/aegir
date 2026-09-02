@@ -64,6 +64,20 @@ test('branch expansion overrides a depth frontier without changing global depth'
   assert.deepEqual(ids(projection), ['root', 'd1', 'd2', 'sibling']);
 });
 
+test('caps the default projection including frontier aggregates', () => {
+  const children = Array.from({ length: 35 }, (_, index) => node(`child-${String(index).padStart(2, '0')}`));
+  const grandchildren = children.map((child) => node(`grandchild-${child.id}`));
+  const nodes = [node('root'), ...children, ...grandchildren];
+  const edges = [
+    ...children.map((child) => edge('root', child.id)),
+    ...children.map((child, index) => edge(child.id, grandchildren[index].id)),
+  ];
+  const projection = projectGraph(nodes, edges, { activeNodeId: 'root', upstreamDepth: 0, downstreamDepth: 1, branchLimit: 35, nodeBudget: 30 });
+  const visible = new Set(projection.nodes.map((item) => item.id));
+  assert.equal(projection.nodes.length, 40);
+  assert.ok(projection.edges.every((item) => visible.has(item.source) && visible.has(item.target)));
+});
+
 test('projection order stays deterministic when active node changes', () => {
   const nodes = [node('a'), node('b'), node('c'), node('d')];
   const edges = [edge('a', 'b'), edge('b', 'c'), edge('c', 'd')];

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath, getSmoothStepPath,
   MarkerType, useReactFlow, useNodesState, useEdgesState,
   type Node, type Edge, type NodeProps, type EdgeProps,
 } from '@xyflow/react';
@@ -12,6 +12,7 @@ import type { FrontierAggregate } from '../../lib/graphProjection';
 import { positionGraph } from '../../layout/dagreLayout';
 import { clampSlot, viewportForAnchor } from '../../layout/viewport';
 import type { LayoutStrategy } from '../../layout/types';
+import { buildEdgePrototype, measureEdgePrototype, type EdgePrototypeMetrics, type EdgePrototypeStage } from '../../edges/prototypes';
 
 // ---------------------------------------------------------------------------
 // Decoration model shared by all graph modes
@@ -67,6 +68,10 @@ export interface SystemGraphProps {
   layoutStrategy?: LayoutStrategy;
   rankdir?: 'LR' | 'TB';
   theme?: 'light' | 'dark';
+  edgePrototypeStage?: EdgePrototypeStage;
+  pathEdgeIds?: ReadonlySet<string>;
+  deltaEdgeIds?: ReadonlySet<string>;
+  onEdgePrototypeMetrics?: (metrics: EdgePrototypeMetrics) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +95,7 @@ type SysData = {
 type OutcomeData = { label: string; status: CoverageStatus; dimmed?: boolean };
 type BoundaryData = { label: string; kind: GraphGroup['kind'] };
 type FrontierData = { label: string; direction: FrontierAggregate['direction']; hiddenCount: number; selected?: boolean };
-type SysEdgeData = { tone: EdgeTone; width: number; dashed?: boolean; dotted?: boolean; label?: string; dimmed?: boolean; highlighted?: boolean; selected?: boolean; kind: string };
+type SysEdgeData = { tone: EdgeTone; width: number; dashed?: boolean; dotted?: boolean; label?: string; dimmed?: boolean; highlighted?: boolean; selected?: boolean; kind: string; routing?: 'bezier' | 'trunk' | 'orthogonal'; lane?: number; trunkId?: string; trunkRole?: 'source' | 'target' };
 
 type SysFlowNode = Node<SysData, 'sys'>;
 type OutcomeFlowNode = Node<OutcomeData, 'outcome'>;
@@ -193,7 +198,10 @@ function SysNodeView({ data }: NodeProps<SysFlowNode>) {
       )}
       style={heatStyle}
     >
-      <Handle type="target" position={Position.Left} className="opacity-0" />
+      <Handle id="control-in" type="target" position={Position.Left} className="opacity-0" />
+      <Handle id="data-in" type="target" position={Position.Top} className="opacity-0" />
+      <Handle id="async-in" type="target" position={Position.Top} className="opacity-0" />
+      <Handle id="ownership-in" type="target" position={Position.Left} className="opacity-0" />
       <div className="flex items-center gap-1.5">
         <KindIcon kind={n.kind} className={compact ? 'h-3 w-3' : undefined} />
         <span className={cn('truncate font-mono font-medium text-zinc-100', compact ? 'text-[10.5px]' : 'text-[11.5px]', tone === 'removed' && 'line-through text-zinc-400')}>{label}</span>
@@ -228,7 +236,10 @@ function SysNodeView({ data }: NodeProps<SysFlowNode>) {
         </button>
       )}
       {tone === 'hot' && <Flame className="absolute -left-2 -top-2 h-4 w-4 text-orange-400" />}
-      <Handle type="source" position={Position.Right} className="opacity-0" />
+      <Handle id="control-out" type="source" position={Position.Right} className="opacity-0" />
+      <Handle id="data-out" type="source" position={Position.Bottom} className="opacity-0" />
+      <Handle id="async-out" type="source" position={Position.Bottom} className="opacity-0" />
+      <Handle id="ownership-out" type="source" position={Position.Right} className="opacity-0" />
     </div>
   );
 }
@@ -273,8 +284,11 @@ function FrontierView({ data }: NodeProps<FrontierFlowNode>) {
 // Edge view
 // ---------------------------------------------------------------------------
 function SysEdgeView({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd }: EdgeProps<SysFlowEdge>) {
-  const [path, lx, ly] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, curvature: 0.35 });
   const d = data!;
+  const verticalTrunk = d.routing === 'trunk' && (sourcePosition === Position.Bottom || targetPosition === Position.Top);
+  const [path, lx, ly] = d.routing === 'orthogonal' || d.routing === 'trunk'
+    ? getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: 4, offset: 14 + (d.lane ?? 0) * 6, centerX: d.routing === 'trunk' && !verticalTrunk ? (d.trunkRole === 'source' ? sourceX + 48 : targetX - 48) : undefined, centerY: verticalTrunk ? (d.trunkRole === 'source' ? sourceY + 48 : targetY - 48) : undefined })
+    : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, curvature: 0.35 });
   const color = d.highlighted ? edgeColor.highlight : edgeColor[d.tone];
   return (
     <>
@@ -316,8 +330,9 @@ function nodeSize(n: SysNode, label: string, sub: string | undefined, metrics: s
   return { width, height };
 }
 
-function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[] } {
+function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[]; prototypeMetrics?: EdgePrototypeMetrics } {
   const { nodes, edges, frontiers = [], decor = {}, selected, compact = false, onMarkerClick } = props;
+  const prototype = props.edgePrototypeStage ? buildEdgePrototype(edges, props.edgePrototypeStage, { selectedEdgeId: props.selectedEdge, pathEdgeIds: props.pathEdgeIds, deltaEdgeIds: props.deltaEdgeIds, labels: decor.edgeLabel }) : undefined;
   const items: { id: string; width: number; height: number }[] = [];
   const flowNodes: AnyNode[] = [];
   const meta = new Map<string, { width: number; height: number }>();
@@ -348,18 +363,21 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
     const dashed = e.kind === 'retries' || e.kind === 'depends_on' || tone === 'removed' || e.boundary === 'network';
     const dotted = e.kind === 'publishes' || e.kind === 'consumes';
     const [s, t] = e.kind === 'consumes' ? [e.target, e.source] : [e.source, e.target];
+    const presentation = prototype?.get(e.id);
     const highlighted = decor.edgeHighlight?.has(e.id);
     const color = highlighted ? edgeColor.highlight : edgeColor[tone in edgeColor ? tone : 'default'];
     return {
       id: e.id,
       source: s,
       target: t,
+      sourceHandle: props.edgePrototypeStage && props.edgePrototypeStage >= 2 ? (e.kind === 'consumes' ? presentation?.targetPort.handle : presentation?.sourcePort.handle) : undefined,
+      targetHandle: props.edgePrototypeStage && props.edgePrototypeStage >= 2 ? (e.kind === 'consumes' ? presentation?.sourcePort.handle : presentation?.targetPort.handle) : undefined,
       type: 'sys',
       interactionWidth: 20,
       focusable: true,
       ariaLabel: `${e.kind} edge from ${s} to ${t}`,
       markerEnd: { type: MarkerType.ArrowClosed, color, width: 12, height: 12 },
-      data: { tone: tone in edgeColor ? tone : 'default', width, dashed, dotted, label: decor.edgeLabel?.[e.id], dimmed: decor.edgeDimmed?.has(e.id), highlighted, selected: props.selectedEdge === e.id, kind: e.kind },
+      data: { tone: tone in edgeColor ? tone : 'default', width: presentation?.bundle ? Math.min(4, width + Math.log2(presentation.bundle.count) * 0.45) : presentation?.trunkId ? Math.max(width, 2.2) : width, dashed, dotted, label: presentation ? presentation.label : decor.edgeLabel?.[e.id], dimmed: decor.edgeDimmed?.has(e.id), highlighted: highlighted || presentation?.pathHighlighted, selected: props.selectedEdge === e.id, kind: e.kind, routing: presentation?.routing, lane: presentation?.lane, trunkId: presentation?.trunkId, trunkRole: presentation?.trunkRole },
     };
   });
 
@@ -407,7 +425,9 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
 
   const topologyRevision = props.topologyRevision ?? `${items.map((item) => item.id).join(',')}|${links.map((link) => `${link.source}>${link.target}`).join(',')}|${props.rankdir ?? 'LR'}`;
   const strategy = props.rankdir === 'TB' ? 'explicit-TB' : props.layoutStrategy ?? 'dependency-LR';
+  const layoutStarted = globalThis.performance.now();
   const pos = new Map(positionGraph(topologyRevision, items, links, strategy, props.anchorNodeId ?? props.selected, props.pinnedNodeIds, props.lockedPathNodeIds).positions);
+  const layoutTimeMs = globalThis.performance.now() - layoutStarted;
 
   for (const fn of flowNodes) {
     const p = pos.get(fn.id);
@@ -433,14 +453,26 @@ function build(props: SystemGraphProps): { nodes: AnyNode[]; edges: SysFlowEdge[
     }
   }
 
-  return { nodes: [...boundaryNodes, ...flowNodes], edges: flowEdges };
+  const prototypeMetrics = props.edgePrototypeStage && prototype ? measureEdgePrototype({
+    edges,
+    positions: new Map(nodes.flatMap((node) => {
+      const point = pos.get(node.id);
+      const size = meta.get(node.id);
+      return point && size ? [[node.id, { id: node.id, x: point.x, y: point.y, width: size.width, height: size.height }] as const] : [];
+    })),
+    presentations: prototype,
+    stage: props.edgePrototypeStage,
+    layoutTimeMs,
+    hitTargetWidth: 20,
+  }) : undefined;
+  return { nodes: [...boundaryNodes, ...flowNodes], edges: flowEdges, prototypeMetrics };
 }
 
 // ---------------------------------------------------------------------------
 // Canvas
 // ---------------------------------------------------------------------------
 function Canvas(props: SystemGraphProps) {
-  const built = useMemo(() => build(props), [props.nodes, props.edges, props.frontiers, props.decor, props.selected, props.selectedEdge, props.compact, props.rankdir, props.topologyRevision, props.layoutStrategy, props.pinnedNodeIds, props.lockedPathNodeIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const built = useMemo(() => build(props), [props.nodes, props.edges, props.frontiers, props.decor, props.selected, props.selectedEdge, props.compact, props.rankdir, props.topologyRevision, props.layoutStrategy, props.pinnedNodeIds, props.lockedPathNodeIds, props.edgePrototypeStage, props.pathEdgeIds, props.deltaEdgeIds]); // eslint-disable-line react-hooks/exhaustive-deps
   const [nodes, setNodes, onNodesChange] = useNodesState<AnyNode>(built.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<SysFlowEdge>(built.edges);
   const { fitView, getViewport, setViewport } = useReactFlow();
@@ -454,6 +486,7 @@ function Canvas(props: SystemGraphProps) {
   const anchorNodeId = props.anchorNodeId ?? props.selected;
 
   useEffect(() => { nodesRef.current = nodes }, [nodes]);
+  useEffect(() => { if (built.prototypeMetrics) props.onEdgePrototypeMetrics?.(built.prototypeMetrics) }, [built.prototypeMetrics, props.onEdgePrototypeMetrics]);
 
   useEffect(() => {
     const topologyChanged = lastTopology.current !== topologyRevision;

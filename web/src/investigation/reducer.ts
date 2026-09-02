@@ -20,6 +20,7 @@ export type InvestigationAction =
   | { type: 'lockPath'; path: NonNullable<InvestigationState['lockedPath']> }
   | { type: 'unlockPath' }
   | { type: 'expandFrontier'; frontierId: string; beyondDepth?: boolean }
+  | { type: 'toggleFrontier'; frontierId: string; beyondDepth?: boolean }
   | { type: 'collapseFrontier'; frontierId: string }
   | { type: 'clearFrontiers' };
 
@@ -77,6 +78,15 @@ export function investigationReducer(state: InvestigationState, action: Investig
         },
         selectedEntity: { kind: 'frontier', id: action.frontierId },
       };
+    }
+    case 'toggleFrontier': {
+      const next = { ...state.expandedFrontiers };
+      if (next[action.frontierId]) {
+        delete next[action.frontierId];
+        return { ...state, expandedFrontiers: next, selectedEntity: state.focalNodeId ? { kind: 'node', id: state.focalNodeId } : null };
+      }
+      next[action.frontierId] = { pages: 1, beyondDepth: action.beyondDepth };
+      return { ...state, expandedFrontiers: next, selectedEntity: { kind: 'frontier', id: action.frontierId } };
     }
     case 'collapseFrontier': {
       const next = { ...state.expandedFrontiers };

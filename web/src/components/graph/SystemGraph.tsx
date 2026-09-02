@@ -56,7 +56,6 @@ export interface SystemGraphProps {
   selectedEdge?: string;
   onSelect?: (id: string) => void;
   onEdgeSelect?: (id: string) => void;
-  onDoubleClick?: (id: string) => void;
   onMarkerClick?: (violationId: string) => void;
   minimap?: boolean;
   compact?: boolean;
@@ -535,7 +534,6 @@ function Canvas(props: SystemGraphProps) {
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onNodeClick={(_, n) => (n.type === 'sys' || n.type === 'frontier') && props.onSelect?.(n.id)}
-      onNodeDoubleClick={(_, n) => (n.type === 'sys' || n.type === 'frontier') && props.onDoubleClick?.(n.id)}
       onEdgeClick={(_, edge) => props.onEdgeSelect?.(edge.id)}
       onMoveEnd={(_, viewport) => {
         const rect = container.current?.getBoundingClientRect();

@@ -49,6 +49,17 @@ test('frontier expansion remains compatible with the current projector', () => {
   assert.deepEqual(legacyBranchExpansions(state), {});
 });
 
+test('frontier toggle expands once and collapses the same branch', () => {
+  let state = createInvestigationState();
+  state = investigationReducer(state, { type: 'setFocalNode', nodeId: 'root' });
+  state = investigationReducer(state, { type: 'toggleFrontier', frontierId: 'branch', beyondDepth: true });
+  assert.deepEqual(state.expandedFrontiers, { branch: { pages: 1, beyondDepth: true } });
+  assert.deepEqual(state.selectedEntity, { kind: 'frontier', id: 'branch' });
+  state = investigationReducer(state, { type: 'toggleFrontier', frontierId: 'branch', beyondDepth: true });
+  assert.deepEqual(state.expandedFrontiers, {});
+  assert.deepEqual(state.selectedEntity, { kind: 'node', id: 'root' });
+});
+
 test('history pushes navigation, replaces refinements, and supports back and forward', () => {
   const first = createInvestigationState({ contextKey: 'snapshot:a' });
   const second = investigationReducer(first, { type: 'setFocalNode', nodeId: 'second' });

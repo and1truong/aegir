@@ -1,16 +1,16 @@
 .PHONY: build test lint release-snapshot clean
 
 build:
-	npm --prefix web ci
-	npm --prefix web run build
+	bun install --cwd web --frozen-lockfile
+	bun run --cwd web build
 	go generate ./internal/frontend
 	go build -o bin/aegir ./cmd/aegir
 
 test:
 	go test ./...
-	npm --prefix web ci
-	npm --prefix web test
-	npm --prefix web run typecheck
+	bun install --cwd web --frozen-lockfile
+	bun run --cwd web test
+	bun run --cwd web typecheck
 
 lint:
 	test -z "$(gofmt -l .)"

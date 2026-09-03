@@ -14,7 +14,7 @@ func main() {
 	const destination = "dist"
 
 	if _, err := os.Stat(source); err != nil {
-		fmt.Fprintf(os.Stderr, "frontend build not found at %s; run npm --prefix web run build first: %v\n", source, err)
+		fmt.Fprintf(os.Stderr, "frontend build not found at %s; run bun run --cwd web build first: %v\n", source, err)
 		os.Exit(1)
 	}
 	if err := clearDirectory(destination); err != nil {

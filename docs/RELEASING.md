@@ -41,4 +41,4 @@ make lint test
 make release-snapshot
 ```
 
-Snapshot nằm ở `dist/`, không tạo Git tag hay GitHub Release. GoReleaser tự chạy `npm ci`, build frontend và embed nó vào binary theo hooks trong `.goreleaser.yaml`; vì vậy không release từ worktree có thay đổi chưa commit.
+Snapshot nằm ở `dist/`, không tạo Git tag hay GitHub Release. GoReleaser tự chạy `bun install --frozen-lockfile`, build frontend và embed nó vào binary theo hooks trong `.goreleaser.yaml`; vì vậy không release từ worktree có thay đổi chưa commit.

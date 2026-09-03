@@ -637,7 +637,7 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 		s.serveEmbeddedFrontend(w, r, clean)
 		return
 	}
-	writeError(w, http.StatusNotFound, errors.New("frontend is not built; run npm --prefix web run build"))
+	writeError(w, http.StatusNotFound, errors.New("frontend is not built; run bun run --cwd web build"))
 }
 
 func (s *Server) serveDiskFrontend(w http.ResponseWriter, r *http.Request, clean string) {

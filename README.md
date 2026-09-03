@@ -4,11 +4,11 @@ Aegir is a local-first code-intelligence tool. It indexes a local Git repository
 
 ## Run locally
 
-Requirements: Go 1.25+, Node.js 22+, and npm.
+Requirements: Go 1.25+ and Bun 1.4+.
 
 ```sh
-npm --prefix web install
-npm run build
+bun install --cwd web --frozen-lockfile
+bun run build
 ./bin/aegir serve
 ```
 
@@ -17,8 +17,8 @@ Open `http://127.0.0.1:4123` and enter the absolute path of a local Git reposito
 For development, run the API and Vite client separately:
 
 ```sh
-npm run dev:api
-npm run dev:web
+bun run dev:api
+bun run dev:web
 ```
 
 Vite proxies `/api` to the Go server at `127.0.0.1:4123`.

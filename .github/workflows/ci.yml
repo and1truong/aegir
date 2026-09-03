@@ -11,13 +11,13 @@ permissions:
 
 jobs:
   test:
-    name: Test (Go ${{ matrix.go }}, Node ${{ matrix.node }})
+    name: Test (Go ${{ matrix.go }}, Bun ${{ matrix.bun }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         go: ["1.25.x"]
-        node: ["22.x"]
+        bun: ["1.4.1"]
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -28,15 +28,13 @@ jobs:
           go-version: ${{ matrix.go }}
           check-latest: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          bun-version: ${{ matrix.bun }}
 
       - name: Install frontend dependencies
-        run: npm --prefix web ci
+        run: bun install --cwd web --frozen-lockfile
 
       - name: Check Go formatting
         run: test -z "$(gofmt -l .)"
@@ -49,8 +47,8 @@ jobs:
 
       - name: Test, type-check, and embed frontend
         run: |
-          npm --prefix web test
-          npm --prefix web run typecheck
-          npm --prefix web run build
+          bun run --cwd web test
+          bun run --cwd web typecheck
+          bun run --cwd web build
           go generate ./internal/frontend
           go build ./cmd/aegir

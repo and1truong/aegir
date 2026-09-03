@@ -40,20 +40,18 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22.x
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          bun-version: "1.4.1"
 
       - name: Run release checks
         run: |
           go vet ./...
           go test ./...
-          npm --prefix web ci
-          npm --prefix web test
-          npm --prefix web run typecheck
+          bun install --cwd web --frozen-lockfile
+          bun run --cwd web test
+          bun run --cwd web typecheck
 
       - name: Verify GoReleaser configuration
         uses: goreleaser/goreleaser-action@v6

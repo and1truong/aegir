@@ -232,7 +232,7 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 		"routes/a_test.go":   "package routes_test\nimport \"github.com/labstack/echo/v4\"\ntype GenericHandlers[T any] []T\nvar e = echo.New()\nvar api = e.Group(\"/test\")\n",
 		"routes/types.go":    "package routes\ntype InnerHandlers[U any] []U\ntype GenericHandlers[T any] InnerHandlers[*T]\n",
 		"routes/register.go": "package routes\nimport (\"example.com/routes/auth\"; \"example.com/routes/orders\"; \"github.com/labstack/echo/v4\")\ntype Router struct{}\ntype Cache struct{}\ntype Server struct { cache Cache }\ntype LocalHandler struct{}\nfunc (Router) GET(string, any) {}\nfunc (Cache) GET(string, any) {}\nfunc (*LocalHandler) Handle() {}\nfunc onMiss() {}\nfunc makeHandler(any) func() { return onMiss }\nvar newEcho = echo.New\nvar e = newEcho()\nvar api = e.Group(\"/package\")\nfunc PackageRoute() { api.GET(\"/orders\", onMiss, auth.Require) }\nfunc External(g *echo.Group, e *echo.Echo, handlers []*orders.AdminHandler, genericHandlers GenericHandlers[orders.AdminHandler]) { g.GET(\"/external-group\", onMiss); e.GET(\"/external-echo\", onMiss, auth.Require); e.GET(\"/factory\", makeHandler(nil), auth.Require); v1 := e.Group(\"/v1\"); v1.GET(\"/orders\", onMiss); e.Group(\"/direct\").GET(\"/orders\", onMiss); for _, h := range handlers { e.GET(\"/ranged\", h.Handle) }; literalHandlers := []*orders.AdminHandler{{}}; for _, h := range literalHandlers { e.GET(\"/ranged-literal\", h.Handle) }; constructorHandlers := orders.NewHandlers(); for _, h := range constructorHandlers { e.GET(\"/ranged-constructor\", h.Handle) }; var namedHandlers orders.Handlers; for _, h := range namedHandlers { e.GET(\"/ranged-named\", h.Handle) }; for _, h := range genericHandlers { e.GET(\"/ranged-generic\", h.Handle) } }\nfunc Chained(server Server) { server.cache.GET(\"/config-field\", onMiss) }\nfunc Register(router Router, api Cache, h *orders.PublicHandler, handlers chan *orders.AdminHandler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.PublicHandler).Handle); fromConstructor := orders.NewHandler(); router.GET(\"/constructor\", fromConstructor.Handle); literal := &orders.PublicHandler{}; router.GET(\"/literal\", literal.Handle); { h := &orders.AdminHandler{}; router.GET(\"/admin\", h.Handle) }; switch { case true: h := &orders.AdminHandler{}; if true { router.GET(\"/switch\", h.Handle) } }; select { case h := <-handlers: if true { router.GET(\"/select\", h.Handle) }; default: }; router.GET(\"/health\", func() {}); api.GET(\"/config\", onMiss) }\n",
-		"routes/z_test.go":   "package routes_test\nimport (routes \"example.com/routes/routes\"; \"github.com/labstack/echo/v4\")\nfunc onMiss() {}\nfunc TestExternal(e *echo.Echo, h *routes.LocalHandler) { e.GET(\"/external-test\", h.Handle) }\n",
+		"routes/z_test.go":   "package routes_test\nimport (routes \"example.com/routes/routes\"; \"github.com/labstack/echo/v4\")\ntype LocalHandler struct{}\nfunc (*LocalHandler) Handle() {}\nfunc NewHandler() *LocalHandler { return &LocalHandler{} }\nfunc onMiss() {}\nfunc TestExternal(e *echo.Echo, h *routes.LocalHandler) { e.GET(\"/external-test\", h.Handle); own := NewHandler(); e.GET(\"/external-test-own\", own.Handle) }\n",
 	} {
 		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -248,11 +248,20 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 	}
 	endpointIDs := map[string]string{}
 	handlerIDs := map[string]string{}
+	productionLocalHandlerID, testLocalHandlerID := "", ""
 	for _, node := range snapshot.Nodes {
 		if node.Kind == "endpoint" {
 			endpointIDs[node.Label] = node.ID
 		}
 		if node.Kind == "method" || node.Kind == "function" {
+			if node.Label == "LocalHandler.Handle" {
+				if strings.HasPrefix(node.File, "routes/register.go:") {
+					productionLocalHandlerID = node.ID
+				} else if strings.HasPrefix(node.File, "routes/z_test.go:") {
+					testLocalHandlerID = node.ID
+				}
+				continue
+			}
 			if node.Label == "onMiss" && !strings.HasPrefix(node.File, "routes/register.go:") {
 				continue
 			}
@@ -275,8 +284,11 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 			t.Fatalf("endpoint %q was not connected to PublicHandler.Handle: %#v", label, snapshot.Edges)
 		}
 	}
-	if connections["GET /external-test"] != handlerIDs["LocalHandler.Handle"] {
+	if connections["GET /external-test"] != productionLocalHandlerID {
 		t.Fatalf("external test receiver was not connected to production LocalHandler.Handle: %#v", snapshot.Edges)
+	}
+	if connections["GET /external-test-own"] != testLocalHandlerID {
+		t.Fatalf("constructor receiver was not connected to external-test LocalHandler.Handle: %#v", snapshot.Edges)
 	}
 	if connections["GET /admin"] != handlerIDs["AdminHandler.Handle"] {
 		t.Fatalf("shadowed receiver was not connected to AdminHandler.Handle: %#v", snapshot.Edges)
@@ -302,7 +314,7 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 			t.Fatalf("range-bound receiver for %q was not connected to AdminHandler.Handle: %#v", label, snapshot.Edges)
 		}
 	}
-	if len(endpointIDs) != 20 || endpointIDs["GET /config"] != "" || endpointIDs["GET /config-field"] != "" {
+	if len(endpointIDs) != 21 || endpointIDs["GET /config"] != "" || endpointIDs["GET /config-field"] != "" {
 		t.Fatalf("unexpected endpoint set: %#v", endpointIDs)
 	}
 }

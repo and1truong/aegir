@@ -647,6 +647,15 @@ func (x *indexer) receiverPackageName(fn function, expression ast.Expr) string {
 		return x.receiverPackageName(fn, value.Value)
 	case *ast.CompositeLit:
 		return x.receiverPackageName(fn, value.Type)
+	case *ast.CallExpr:
+		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
+			for _, candidate := range x.functions {
+				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
+					continue
+				}
+				return x.receiverPackageName(candidate, candidate.decl.Type.Results.List[0].Type)
+			}
+		}
 	}
 	return ""
 }

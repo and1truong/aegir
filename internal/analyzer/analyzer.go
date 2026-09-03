@@ -628,6 +628,12 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 	case *ast.CompositeLit:
 		return x.receiverReference(fn, value.Type)
 	case *ast.CallExpr:
+		if selector, ok := value.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Group" {
+			packageID, receiverType := x.receiverReference(fn, selector.X)
+			if routeReceiverName(receiverType) || receiverType == "" && routeReceiverName(expressionName(selector.X)) {
+				return packageID, "Group"
+			}
+		}
 		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
 			for _, candidate := range x.functions {
 				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
@@ -664,20 +670,20 @@ func boundExpression(fn function, name string, before token.Pos) ast.Expr {
 			}
 		}
 	}
-	if result := bindingInBlock(fn.decl.Body, name, before); result != nil {
+	if result := bindingInBlock(fn, fn.decl.Body, name, before); result != nil {
 		return result
 	}
 	return fallback
 }
 
-func bindingInBlock(block *ast.BlockStmt, name string, before token.Pos) ast.Expr {
+func bindingInBlock(fn function, block *ast.BlockStmt, name string, before token.Pos) ast.Expr {
 	if block == nil {
 		return nil
 	}
-	return bindingInStatements(block.List, name, before)
+	return bindingInStatements(fn, block.List, name, before)
 }
 
-func bindingInStatements(statements []ast.Stmt, name string, before token.Pos) ast.Expr {
+func bindingInStatements(fn function, statements []ast.Stmt, name string, before token.Pos) ast.Expr {
 	var result ast.Expr
 	for _, statement := range statements {
 		if statement.Pos() >= before {
@@ -689,11 +695,11 @@ func bindingInStatements(statements []ast.Stmt, name string, before token.Pos) a
 			}
 			continue
 		}
-		if binding := bindingFromScopedHeader(statement, name); binding != nil {
+		if binding := bindingFromScopedHeader(fn, statement, name); binding != nil {
 			result = binding
 		}
 		if nested := containingStatements(statement, before); nested != nil {
-			if binding := bindingInStatements(nested, name, before); binding != nil {
+			if binding := bindingInStatements(fn, nested, name, before); binding != nil {
 				return binding
 			}
 		}
@@ -737,7 +743,7 @@ func bindingFromStatement(statement ast.Stmt, name string) ast.Expr {
 	return nil
 }
 
-func bindingFromScopedHeader(statement ast.Stmt, name string) ast.Expr {
+func bindingFromScopedHeader(fn function, statement ast.Stmt, name string) ast.Expr {
 	var initializer ast.Stmt
 	switch value := statement.(type) {
 	case *ast.IfStmt:
@@ -753,8 +759,44 @@ func bindingFromScopedHeader(statement ast.Stmt, name string) ast.Expr {
 		initializer = value.Init
 	case *ast.CommClause:
 		return bindingFromStatement(value.Comm, name)
+	case *ast.RangeStmt:
+		return rangeBinding(fn, value, name)
 	}
 	return bindingFromStatement(initializer, name)
+}
+
+func rangeBinding(fn function, statement *ast.RangeStmt, name string) ast.Expr {
+	sourceType := statement.X
+	if identifier, ok := statement.X.(*ast.Ident); ok {
+		if bound := boundExpression(fn, identifier.Name, statement.Pos()); bound != nil {
+			sourceType = bound
+		}
+	}
+	key, keyMatches := statement.Key.(*ast.Ident)
+	value, valueMatches := statement.Value.(*ast.Ident)
+	keyMatches = keyMatches && key.Name == name
+	valueMatches = valueMatches && value.Name == name
+	switch source := sourceType.(type) {
+	case *ast.ArrayType:
+		if valueMatches {
+			return source.Elt
+		}
+	case *ast.MapType:
+		if keyMatches {
+			return source.Key
+		}
+		if valueMatches {
+			return source.Value
+		}
+	case *ast.ChanType:
+		if keyMatches {
+			return source.Value
+		}
+	}
+	if valueMatches || keyMatches {
+		return statement.X
+	}
+	return nil
 }
 
 func containingStatements(node ast.Node, position token.Pos) []ast.Stmt {
@@ -801,10 +843,14 @@ func (x *indexer) connect() {
 			name := strings.ToUpper(callName)
 			handlerID := ""
 			inlineHandler := false
-			for index := len(call.Args) - 1; index >= 0; index-- {
+			start, stop, step := len(call.Args)-1, -1, -1
+			if x.isEchoRegistration(fn, call) {
+				start, stop, step = 0, len(call.Args), 1
+			}
+			for index := start; index != stop; index += step {
 				if _, ok := call.Args[index].(*ast.FuncLit); ok {
 					inlineHandler = true
-					continue
+					break
 				}
 				candidate, _ := x.resolveTarget(fn, call.Args[index])
 				if kind := x.nodes[candidate].Kind; kind == "function" || kind == "method" {
@@ -841,6 +887,18 @@ func (x *indexer) connect() {
 			return true
 		})
 	}
+}
+
+func (x *indexer) isEchoRegistration(fn function, call *ast.CallExpr) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	packageID, receiverType := x.receiverReference(fn, selector.X)
+	if receiverType != "Echo" && receiverType != "Group" {
+		return false
+	}
+	return strings.Contains(x.nodes[packageID].Label, "labstack/echo")
 }
 
 func (x *indexer) isVerbRegistration(fn function, call *ast.CallExpr) bool {

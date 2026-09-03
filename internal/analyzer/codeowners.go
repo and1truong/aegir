@@ -10,7 +10,7 @@ import (
 
 type codeOwnerRule struct {
 	pattern *regexp.Regexp
-	owner   string
+	owners  []string
 }
 
 func readCodeOwners(root string) []codeOwnerRule {
@@ -34,7 +34,7 @@ func readCodeOwners(root string) []codeOwnerRule {
 			continue
 		}
 		if pattern := codeOwnerPattern(fields[0]); pattern != nil {
-			rules = append(rules, codeOwnerRule{pattern: pattern, owner: fields[1]})
+			rules = append(rules, codeOwnerRule{pattern: pattern, owners: append([]string(nil), fields[1:]...)})
 		}
 	}
 	return rules
@@ -89,12 +89,20 @@ func codeOwnerPattern(value string) *regexp.Regexp {
 }
 
 func ownerFor(rules []codeOwnerRule, path string) string {
+	owners := ownersFor(rules, path)
+	if len(owners) == 0 {
+		return ""
+	}
+	return owners[0]
+}
+
+func ownersFor(rules []codeOwnerRule, path string) []string {
 	path = strings.TrimPrefix(filepath.ToSlash(path), "./")
-	owner := ""
+	var owners []string
 	for _, rule := range rules {
 		if rule.pattern.MatchString(path) {
-			owner = rule.owner
+			owners = rule.owners
 		}
 	}
-	return owner
+	return append([]string(nil), owners...)
 }

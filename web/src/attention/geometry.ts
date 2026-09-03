@@ -19,3 +19,14 @@ export function bubbleRadius(unit: AttentionUnit) {
 export function zoomedScore(value: number | null, zoom: number) {
   return clamp(.5 + ((value ?? 0) / 100 - .5) * zoom, 0, 1);
 }
+
+export function jitteredScore(value: number | null, threshold: number, zoom: number, jitter: number) {
+  const score = value ?? 0;
+  const boundary = zoomedScore(threshold, zoom);
+  const shifted = zoomedScore(value, zoom) + jitter;
+  return clamp(score >= threshold ? Math.max(shifted, boundary) : Math.min(shifted, boundary - Number.EPSILON), 0, 1);
+}
+
+export function bubblePaintOrder<T extends { unit: AttentionUnit }>(points: readonly T[]) {
+  return [...points].sort((left, right) => bubbleRadius(right.unit) - bubbleRadius(left.unit) || left.unit.unit.id.localeCompare(right.unit.unit.id));
+}

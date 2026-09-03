@@ -316,7 +316,7 @@ func nodeChangeReasons(before, after analyzer.Node) []ChangeReason {
 	if before.Kind != after.Kind || before.Label != after.Label || before.File != after.File || before.Description != after.Description {
 		reasons = append(reasons, ChangeReason{Kind: "field-changed", Detail: "Canonical node fields changed."})
 	}
-	if before.Service != after.Service || before.Package != after.Package || before.Owner != after.Owner {
+	if before.Service != after.Service || before.Package != after.Package || before.Owner != after.Owner || !reflect.DeepEqual(before.Owners, after.Owners) {
 		reasons = append(reasons, ChangeReason{Kind: "ownership-changed", Detail: "Code ownership or service/package membership changed."})
 	}
 	if strings.Join(before.Tags, "\x00") != strings.Join(after.Tags, "\x00") {
@@ -442,8 +442,13 @@ func nodeFingerprint(node analyzer.Node) string {
 	node.Change = ""
 	node.Tags = append([]string(nil), node.Tags...)
 	sort.Strings(node.Tags)
+	node.Owners = append([]string(nil), node.Owners...)
+	sort.Strings(node.Owners)
 	if len(node.Tags) == 0 {
 		node.Tags = nil
+	}
+	if len(node.Owners) == 0 {
+		node.Owners = nil
 	}
 	if len(node.Meta) == 0 {
 		node.Meta = nil

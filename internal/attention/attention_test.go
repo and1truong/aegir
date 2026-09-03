@@ -142,16 +142,18 @@ func TestCalculateMapsContractsAndHistoryToPackagesWithoutFunctions(t *testing.T
 }
 
 func TestCalculateUsesCodeOwnershipForCrossTeamFactors(t *testing.T) {
-	pkgA := analyzer.Node{ID: "pkg:a", Kind: "package", Label: "a", Owner: "@one"}
-	pkgB := analyzer.Node{ID: "pkg:b", Kind: "package", Label: "b", Owner: "@two"}
+	pkgA := analyzer.Node{ID: "pkg:a", Kind: "package", Label: "a", Owner: "@one", Owners: []string{"@one", "@shared"}}
+	pkgB := analyzer.Node{ID: "pkg:b", Kind: "package", Label: "b", Owner: "@two", Owners: []string{"@two", "@shared"}}
+	pkgC := analyzer.Node{ID: "pkg:c", Kind: "package", Label: "c", Owner: "@three", Owners: []string{"@three"}}
 	fnA := analyzer.Node{ID: "fn:a", Kind: "function", Package: pkgA.ID}
 	fnB := analyzer.Node{ID: "fn:b", Kind: "function", Package: pkgB.ID}
-	snapshot := analyzer.Snapshot{Nodes: []analyzer.Node{pkgA, pkgB, fnA, fnB}, Edges: []analyzer.Edge{{ID: "b-a", Source: fnB.ID, Target: fnA.ID, Kind: "calls"}}}
+	fnC := analyzer.Node{ID: "fn:c", Kind: "function", Package: pkgC.ID}
+	snapshot := analyzer.Snapshot{Nodes: []analyzer.Node{pkgA, pkgB, pkgC, fnA, fnB, fnC}, Edges: []analyzer.Edge{{ID: "b-a", Source: fnB.ID, Target: fnA.ID, Kind: "calls"}, {ID: "c-a", Source: fnC.ID, Target: fnA.ID, Kind: "calls"}}}
 	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
 	for _, unit := range landscape.Units {
 		if unit.Unit.ID == pkgA.ID {
 			factor := factorByID(unit.Impact, "cross-team-dependents")
-			if unit.Unit.Team != "@one" || factor.Status != "observed" || factor.RawValue != 1 {
+			if unit.Unit.Team != "@one" || strings.Join(unit.Unit.Teams, ",") != "@one,@shared" || factor.Status != "observed" || factor.RawValue != 1 {
 				t.Fatalf("ownership signal missing: %#v", unit)
 			}
 		}

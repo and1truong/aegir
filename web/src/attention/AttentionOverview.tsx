@@ -20,6 +20,10 @@ function subsystem(unit: AttentionUnit) {
   return path.includes('/') ? path.split('/')[0] : 'root';
 }
 
+function teamsForUnit(unit: AttentionUnit) {
+  return unit.unit.teams?.length ? unit.unit.teams : unit.unit.team ? [unit.unit.team] : [];
+}
+
 export function AttentionOverview({ openUnit, theme }: { openUnit: (unitId: string) => void; theme: 'light' | 'dark' }) {
   const { snapshot, active, reindex, loading } = useProduct();
   const [windowDays, setWindowDays] = useState(initialWindow);
@@ -52,10 +56,10 @@ export function AttentionOverview({ openUnit, theme }: { openUnit: (unitId: stri
     window.history.replaceState({}, '', url);
   }, [windowDays, query, region, scope, team, selectedUnitID]);
   const subsystems = useMemo(() => [...new Set((landscape?.units ?? []).map(subsystem))].sort(), [landscape]);
-  const teams = useMemo(() => [...new Set((landscape?.units ?? []).flatMap((unit) => unit.unit.team ? [unit.unit.team] : []))].sort(), [landscape]);
+  const teams = useMemo(() => [...new Set((landscape?.units ?? []).flatMap(teamsForUnit))].sort(), [landscape]);
   useEffect(() => { if (scope !== 'all' && landscape && !subsystems.includes(scope)) setScope('all') }, [landscape, scope, subsystems]);
   useEffect(() => { if (team !== 'all' && landscape && !teams.includes(team)) setTeam('all') }, [landscape, team, teams]);
-  const units = useMemo(() => (landscape?.units ?? []).filter((unit) => (region === 'all' || unit.region === region) && (scope === 'all' || subsystem(unit) === scope) && (team === 'all' || unit.unit.team === team) && (!query.trim() || `${unit.unit.label} ${unit.unit.path ?? ''}`.toLowerCase().includes(query.toLowerCase()))), [landscape, query, region, scope, team]);
+  const units = useMemo(() => (landscape?.units ?? []).filter((unit) => (region === 'all' || unit.region === region) && (scope === 'all' || subsystem(unit) === scope) && (team === 'all' || teamsForUnit(unit).includes(team)) && (!query.trim() || `${unit.unit.label} ${unit.unit.path ?? ''}`.toLowerCase().includes(query.toLowerCase()))), [landscape, query, region, scope, team]);
   const accessibleUnits = useMemo(() => units.length <= 200 ? units : [...units].sort((left, right) => right.priority - left.priority || left.unit.id.localeCompare(right.unit.id)).slice(0, 200), [units]);
   const selectedUnit = landscape?.units.find((unit) => unit.unit.id === selectedUnitID);
   if (!snapshot || !active) return null;

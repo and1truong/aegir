@@ -11,7 +11,7 @@ func TestRunIndexesFunctionsCallsTestsAndContracts(t *testing.T) {
 	root := t.TempDir()
 	for path, body := range map[string]string{
 		".git/HEAD":           "0123456789abcdef\n",
-		".github/CODEOWNERS":  "**/*.go @go-team\n/api/openapi.yaml @api-team\n/models/types.go @models-team\n",
+		".github/CODEOWNERS":  "**/*.go @go-team @platform\n/api/openapi.yaml @api-team\n/models/types.go @models-team\n",
 		"go.mod":              "module example.com/shop\n\ngo 1.24\n",
 		"order/order.go":      "package order\nimport (\"database/sql\"; \"net/http\")\ntype Publisher interface { Publish(string) }\nfunc Create(db *sql.DB, publisher Publisher) { Validate(); db.Exec(`INSERT INTO orders (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id=excluded.id`); publisher.Publish(\"order.created\"); http.Get(\"https://fraud.example/check\"); headers.Set(\"origin\", \"https://not-a-call.example\") }\nfunc Validate() {}\n",
 		"order/order_test.go": "package order\nimport \"testing\"\nfunc TestCreate(t *testing.T) { Create() }\n",
@@ -77,6 +77,9 @@ func TestRunIndexesFunctionsCallsTestsAndContracts(t *testing.T) {
 		if actual := packages[path].Owner; actual != expected {
 			t.Fatalf("package %q owner=%q want %q", path, actual, expected)
 		}
+	}
+	if actual := packages["."].Owners; len(actual) != 2 || actual[0] != "@go-team" || actual[1] != "@platform" {
+		t.Fatalf("root package owners=%q want both CODEOWNERS", actual)
 	}
 	if len(snapshot.Analysis.Complexity) == 0 {
 		t.Fatal("expected function complexity profiles")

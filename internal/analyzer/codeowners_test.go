@@ -3,6 +3,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func TestReadCodeOwnersUsesLastMatchingRule(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("* @platform\n**/*.go @go\n/internal/payments/ @payments\n*.proto @contracts\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("* @platform\n**/*.go @go @shared\n/internal/payments/ @payments\n*.proto @contracts\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	rules := readCodeOwners(root)
@@ -26,6 +27,9 @@ func TestReadCodeOwnersUsesLastMatchingRule(t *testing.T) {
 		if actual := ownerFor(rules, file); actual != expected {
 			t.Fatalf("ownerFor(%q)=%q want %q", file, actual, expected)
 		}
+	}
+	if actual := ownersFor(rules, "main.go"); !reflect.DeepEqual(actual, []string{"@go", "@shared"}) {
+		t.Fatalf("ownersFor(main.go)=%q want both owners", actual)
 	}
 }
 

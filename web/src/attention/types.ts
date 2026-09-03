@@ -19,7 +19,7 @@ export interface AttentionDimension {
 }
 
 export interface AttentionUnit {
-  unit: { id: string; label: string; path?: string; kind: 'package'; team?: string; subsystem?: string };
+  unit: { id: string; label: string; path?: string; kind: 'package'; team?: string; teams?: string[]; subsystem?: string };
   impact: AttentionDimension;
   changeComplexity: AttentionDimension;
   changeVelocity: AttentionDimension;

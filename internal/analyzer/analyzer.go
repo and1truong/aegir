@@ -26,6 +26,7 @@ type Node struct {
 	Package     string         `json:"pkg,omitempty"`
 	File        string         `json:"file,omitempty"`
 	Owner       string         `json:"owner,omitempty"`
+	Owners      []string       `json:"owners,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	Meta        map[string]any `json:"meta,omitempty"`
@@ -339,14 +340,16 @@ func (x *indexer) packageFor(dir, packageName string) string {
 }
 
 func (x *indexer) recordPackageOwner(packageID, path string) {
-	owner := ownerFor(x.owners, path)
-	if owner == "" {
+	owners := ownersFor(x.owners, path)
+	if len(owners) == 0 {
 		return
 	}
 	if x.packageOwners[packageID] == nil {
 		x.packageOwners[packageID] = map[string]int{}
 	}
-	x.packageOwners[packageID][owner]++
+	for _, owner := range owners {
+		x.packageOwners[packageID][owner]++
+	}
 }
 
 func (x *indexer) finalizePackageOwners() {
@@ -363,6 +366,7 @@ func (x *indexer) finalizePackageOwners() {
 		})
 		node := x.nodes[packageID]
 		node.Owner = owners[0]
+		node.Owners = owners
 		x.nodes[packageID] = node
 	}
 }
@@ -424,7 +428,8 @@ func (x *indexer) collect() error {
 				if contractErr != nil {
 					return fmt.Errorf("parse contract %s: %w", rel, contractErr)
 				}
-				n := Node{ID: contract.ID, Kind: "contract", Label: entry.Name(), File: rel, Service: x.serviceID, Owner: ownerFor(x.owners, rel), Description: "Discovered contract file", Meta: map[string]any{"type": typ, "fingerprint": contract.Fingerprint}}
+				owners := ownersFor(x.owners, rel)
+				n := Node{ID: contract.ID, Kind: "contract", Label: entry.Name(), File: rel, Service: x.serviceID, Owner: firstOwner(owners), Owners: owners, Description: "Discovered contract file", Meta: map[string]any{"type": typ, "fingerprint": contract.Fingerprint}}
 				x.nodes[contract.ID] = n
 				x.contracts = append(x.contracts, contract)
 			}
@@ -487,7 +492,8 @@ func (x *indexer) collect() error {
 				sum := sha1.Sum(source[startOffset:endOffset])
 				fingerprint = hex.EncodeToString(sum[:])
 			}
-			n := Node{ID: id, Kind: kind, Label: label, Service: x.serviceID, Package: pkgID, File: fmt.Sprintf("%s:%d", rel, pos.Line), Owner: ownerFor(x.owners, rel), Meta: map[string]any{"exported": ast.IsExported(fn.Name.Name), "startLine": pos.Line, "endLine": end.Line, "fingerprint": fingerprint}}
+			owners := ownersFor(x.owners, rel)
+			n := Node{ID: id, Kind: kind, Label: label, Service: x.serviceID, Package: pkgID, File: fmt.Sprintf("%s:%d", rel, pos.Line), Owner: firstOwner(owners), Owners: owners, Meta: map[string]any{"exported": ast.IsExported(fn.Name.Name), "startLine": pos.Line, "endLine": end.Line, "fingerprint": fingerprint}}
 			x.nodes[id] = n
 			x.byPackage[pkgID][fn.Name.Name] = id
 			x.byPackage[pkgID][label] = id
@@ -509,6 +515,13 @@ func (x *indexer) collect() error {
 	}
 	x.finalizePackageOwners()
 	return nil
+}
+
+func firstOwner(owners []string) string {
+	if len(owners) == 0 {
+		return ""
+	}
+	return owners[0]
 }
 
 func receiverName(expr ast.Expr) string {

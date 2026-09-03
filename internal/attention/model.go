@@ -1,6 +1,6 @@
 package attention
 
-const ModelVersion = "attention-v1.0"
+const ModelVersion = "attention-v1.1"
 
 type EvidenceRef struct {
 	Kind string `json:"kind"`
@@ -26,12 +26,13 @@ type Dimension struct {
 }
 
 type UnitRef struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	Path      string `json:"path,omitempty"`
-	Kind      string `json:"kind"`
-	Team      string `json:"team,omitempty"`
-	Subsystem string `json:"subsystem,omitempty"`
+	ID        string   `json:"id"`
+	Label     string   `json:"label"`
+	Path      string   `json:"path,omitempty"`
+	Kind      string   `json:"kind"`
+	Team      string   `json:"team,omitempty"`
+	Teams     []string `json:"teams,omitempty"`
+	Subsystem string   `json:"subsystem,omitempty"`
 }
 
 type Unit struct {

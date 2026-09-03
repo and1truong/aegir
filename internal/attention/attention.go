@@ -115,7 +115,7 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 		facts[targetUnit].incoming[sourceUnit] = true
 		facts[targetUnit].edges[edge.ID] = true
 		facts[targetUnit].incomingEdges[edge.ID] = true
-		if facts[sourceUnit].node.Owner != "" && facts[targetUnit].node.Owner != "" && facts[sourceUnit].node.Owner != facts[targetUnit].node.Owner {
+		if ownersDiffer(facts[sourceUnit].node, facts[targetUnit].node) {
 			facts[targetUnit].crossTeamDependents[sourceUnit] = true
 			facts[targetUnit].crossTeamEdges[edge.ID] = true
 			facts[sourceUnit].outgoingTeamEdges[edge.ID] = true
@@ -192,7 +192,7 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 			priority += 5
 		}
 		priority = min(priority, 100)
-		units = append(units, Unit{Unit: UnitRef{ID: id, Label: item.node.Label, Path: item.node.File, Kind: "package", Team: item.node.Owner, Subsystem: subsystem(item.node.File)}, Impact: impact, ChangeComplexity: complexity, ChangeVelocity: velocity, Priority: priority, Region: region(impactScore, complexityScore, policy), MemberCount: len(item.members)})
+		units = append(units, Unit{Unit: UnitRef{ID: id, Label: item.node.Label, Path: item.node.File, Kind: "package", Team: item.node.Owner, Teams: nodeOwners(item.node), Subsystem: subsystem(item.node.File)}, Impact: impact, ChangeComplexity: complexity, ChangeVelocity: velocity, Priority: priority, Region: region(impactScore, complexityScore, policy), MemberCount: len(item.members)})
 	}
 	sort.Slice(units, func(i, j int) bool {
 		return units[i].Unit.Label < units[j].Unit.Label || units[i].Unit.Label == units[j].Unit.Label && units[i].Unit.ID < units[j].Unit.ID
@@ -300,11 +300,36 @@ func ownershipFactor(id, label string, raw float64, unit string, weight, normali
 
 func hasOwnership(facts map[string]*packageFacts) bool {
 	for _, item := range facts {
-		if item.node.Owner != "" {
+		if len(nodeOwners(item.node)) > 0 {
 			return true
 		}
 	}
 	return false
+}
+
+func nodeOwners(node analyzer.Node) []string {
+	if len(node.Owners) > 0 {
+		return node.Owners
+	}
+	if node.Owner != "" {
+		return []string{node.Owner}
+	}
+	return nil
+}
+
+func ownersDiffer(left, right analyzer.Node) bool {
+	leftOwners, rightOwners := nodeOwners(left), nodeOwners(right)
+	if len(leftOwners) == 0 || len(rightOwners) == 0 {
+		return false
+	}
+	for _, leftOwner := range leftOwners {
+		for _, rightOwner := range rightOwners {
+			if leftOwner == rightOwner {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func subsystem(path string) string {

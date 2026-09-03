@@ -1,7 +1,7 @@
 import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import type { AttentionLandscape, AttentionUnit } from './types';
-import { bubbleRadius, clamp, stableJitter, zoomedScore } from './geometry';
+import { bubblePaintOrder, bubbleRadius, clamp, jitteredScore, stableJitter, zoomedScore } from './geometry';
 
 const regionColor: Record<AttentionUnit['region'], string> = {
   investigate: '#fb7185',
@@ -32,16 +32,17 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
     return units.map((unit) => {
       const pointRadius = bubbleRadius(unit);
       const offset = stableJitter(unit.unit.id);
-      const normalizedX = zoomedScore(unit.changeComplexity.score, zoom);
-      const normalizedY = zoomedScore(unit.impact.score, zoom);
+      const normalizedX = jitteredScore(unit.changeComplexity.score, landscape.policy.complexityHigh, zoom, offset.x / width);
+      const normalizedY = jitteredScore(unit.impact.score, landscape.policy.impactHigh, zoom, -offset.y / height);
       return {
         unit,
-        x: clamp(margin.left + normalizedX * width + offset.x, margin.left + pointRadius + 2, margin.left + width - pointRadius - 2),
-        y: clamp(margin.top + (1 - normalizedY) * height + offset.y, margin.top + pointRadius + 2, margin.top + height - pointRadius - 2),
+        x: clamp(margin.left + normalizedX * width, margin.left + pointRadius + 2, margin.left + width - pointRadius - 2),
+        y: clamp(margin.top + (1 - normalizedY) * height, margin.top + pointRadius + 2, margin.top + height - pointRadius - 2),
         radius: pointRadius,
       };
     });
-  }, [units, size, zoom]);
+  }, [landscape.policy, units, size, zoom]);
+  const paintedPoints = useMemo(() => bubblePaintOrder(points), [points]);
 
   useEffect(() => {
     const element = canvas.current;
@@ -83,7 +84,7 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
     context.fillStyle = '#f59e0b'; context.fillText('SIMPLIFY', thresholdX + 10, bottom - 10);
     context.fillStyle = '#71717a'; context.fillText('LOW ATTENTION', left + 10, bottom - 10);
     const findingIds = new Set(landscape.findings.map((finding) => finding.unitId));
-    for (const point of [...points].sort((a, b) => bubbleRadius(b.unit) - bubbleRadius(a.unit))) {
+    for (const point of paintedPoints) {
       const color = regionColor[point.unit.region];
       context.globalAlpha = touchedUnitIds && !touchedUnitIds.has(point.unit.unit.id) ? .22 : 1;
       context.beginPath(); context.arc(point.x, point.y, point.radius, 0, Math.PI * 2);
@@ -99,11 +100,11 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
       }
     }
     context.globalAlpha = 1;
-  }, [landscape, points, size, hovered, theme, touchedUnitIds, zoom]);
+  }, [landscape, paintedPoints, size, hovered, theme, touchedUnitIds, zoom]);
 
   const findPoint = (event: MouseEvent<HTMLCanvasElement> | PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect(); const x = event.clientX - rect.left, y = event.clientY - rect.top;
-    return { x, y, point: [...points].reverse().find((item) => Math.hypot(item.x - x, item.y - y) <= item.radius + 5) };
+    return { x, y, point: [...paintedPoints].reverse().find((item) => Math.hypot(item.x - x, item.y - y) <= item.radius + 5) };
   };
   return <div className={`relative flex-1 overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/50 ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`}>
     <canvas ref={canvas} className={`h-full w-full ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`} aria-label={`Attention Map with ${units.length} package bubbles`} onWheel={(event) => { event.preventDefault(); setZoom((value) => clamp(value + (event.deltaY < 0 ? .25 : -.25), 1, 3)) }} onPointerMove={(event) => { const hit = findPoint(event); setHovered(hit.point ? { unit: hit.point.unit, x: hit.x, y: hit.y } : undefined) }} onPointerLeave={() => setHovered(undefined)} onClick={(event) => { const hit = findPoint(event); if (hit.point) onOpen(hit.point.unit.unit.id) }} />

@@ -36,7 +36,16 @@ export function scaleCanvasPoint(x: number, y: number, cssWidth: number, cssHeig
 }
 
 export function tooltipPosition(x: number, y: number, width: number, height: number, tooltipWidth: number, tooltipHeight: number) {
-  return { left: clamp(x + 12, 8, Math.max(8, width - tooltipWidth - 8)), top: clamp(y - 35, 8, Math.max(8, height - tooltipHeight - 8)) };
+  const maxWidth = Math.max(0, width - 16);
+  const maxHeight = Math.max(0, height - 16);
+  const constrainedWidth = Math.min(tooltipWidth, maxWidth);
+  const constrainedHeight = Math.min(tooltipHeight, maxHeight);
+  return {
+    left: clamp(x + 12, 8, Math.max(8, width - constrainedWidth - 8)),
+    top: clamp(y - 35, 8, Math.max(8, height - constrainedHeight - 8)),
+    maxWidth,
+    maxHeight,
+  };
 }
 
 export function zoomAfterWheel(zoom: number, deltaY: number) {

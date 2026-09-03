@@ -36,8 +36,9 @@ test('pointer coordinates scale into the logical canvas size', () => {
 });
 
 test('tooltip position stays inside rendered map bounds', () => {
-  assert.deepEqual(tooltipPosition(290, 290, 300, 300, 224, 96), { left: 68, top: 196 });
-  assert.deepEqual(tooltipPosition(0, 0, 300, 300, 224, 96), { left: 12, top: 8 });
+  assert.deepEqual(tooltipPosition(290, 290, 300, 300, 224, 96), { left: 68, top: 196, maxWidth: 284, maxHeight: 284 });
+  assert.deepEqual(tooltipPosition(0, 0, 300, 300, 224, 96), { left: 12, top: 8, maxWidth: 284, maxHeight: 284 });
+  assert.deepEqual(tooltipPosition(190, 90, 200, 100, 224, 120), { left: 8, top: 8, maxWidth: 184, maxHeight: 84 });
 });
 
 test('wheel zoom changes only away from its directional boundary', () => {

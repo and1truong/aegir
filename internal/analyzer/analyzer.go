@@ -496,7 +496,9 @@ func (x *indexer) collect() error {
 			owners := ownersFor(x.owners, rel)
 			n := Node{ID: id, Kind: kind, Label: label, Service: x.serviceID, Package: pkgID, File: fmt.Sprintf("%s:%d", rel, pos.Line), Owner: firstOwner(owners), Owners: owners, Meta: map[string]any{"exported": ast.IsExported(fn.Name.Name), "startLine": pos.Line, "endLine": end.Line, "fingerprint": fingerprint}}
 			x.nodes[id] = n
-			x.byPackage[pkgID][fn.Name.Name] = id
+			if kind != "method" {
+				x.byPackage[pkgID][fn.Name.Name] = id
+			}
 			x.byPackage[pkgID][label] = id
 			x.functions = append(x.functions, function{node: n, pkgDir: filepath.Dir(path), packageID: pkgID, decl: fn, file: parsed, imports: imports, isTest: isTest})
 			x.addEdge(pkgID, "owns", id, "declares", x.sourceLocation(fn.Pos()))
@@ -569,61 +571,74 @@ func (x *indexer) resolveTarget(fn function, expression ast.Expr) (string, strin
 				return stableID("package", importPath), importPath + "." + target.Sel.Name
 			}
 		}
-		if packageID := x.receiverPackage(fn, target.X); packageID != "" {
-			if id := x.byPackage[packageID][target.Sel.Name]; id != "" {
+		if packageID, receiverType := x.receiverReference(fn, target.X); packageID != "" && receiverType != "" {
+			if id := x.byPackage[packageID][receiverType+"."+target.Sel.Name]; id != "" {
 				return id, target.Sel.Name
 			}
-		}
-		if id := x.byPackage[fn.packageID][target.Sel.Name]; id != "" {
-			return id, target.Sel.Name
 		}
 		return "", target.Sel.Name
 	}
 	return "", ""
 }
 
-func (x *indexer) receiverPackage(fn function, expression ast.Expr) string {
+func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, string) {
 	switch value := expression.(type) {
 	case *ast.Ident:
 		if importPath := fn.imports[value.Name]; importPath != "" {
 			if packageID, local := x.localPackageID(importPath); local {
-				return packageID
+				return packageID, ""
 			}
-			return ""
+			return "", ""
 		}
-		if bound := boundType(fn, value.Name); bound != nil {
-			return x.receiverPackage(fn, bound)
+		if bound := boundExpression(fn, value.Name, value.Pos()); bound != nil {
+			return x.receiverReference(fn, bound)
 		}
-		return fn.packageID
+		if x.hasReceiverType(fn.packageID, value.Name) {
+			return fn.packageID, value.Name
+		}
+		return "", ""
 	case *ast.SelectorExpr:
-		return x.receiverPackage(fn, value.X)
+		packageID, receiverType := x.receiverReference(fn, value.X)
+		if packageID != "" && receiverType == "" {
+			return packageID, value.Sel.Name
+		}
+		return packageID, receiverType
 	case *ast.StarExpr:
-		return x.receiverPackage(fn, value.X)
+		return x.receiverReference(fn, value.X)
 	case *ast.ParenExpr:
-		return x.receiverPackage(fn, value.X)
+		return x.receiverReference(fn, value.X)
 	case *ast.IndexExpr:
-		return x.receiverPackage(fn, value.X)
+		return x.receiverReference(fn, value.X)
 	case *ast.IndexListExpr:
-		return x.receiverPackage(fn, value.X)
+		return x.receiverReference(fn, value.X)
 	case *ast.UnaryExpr:
-		return x.receiverPackage(fn, value.X)
+		return x.receiverReference(fn, value.X)
 	case *ast.CompositeLit:
-		return x.receiverPackage(fn, value.Type)
+		return x.receiverReference(fn, value.Type)
 	case *ast.CallExpr:
 		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
-			node := x.nodes[id]
-			if node.Package != "" {
-				return node.Package
-			}
-			if node.Kind == "package" {
-				return node.ID
+			for _, candidate := range x.functions {
+				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
+					continue
+				}
+				return x.receiverReference(candidate, candidate.decl.Type.Results.List[0].Type)
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
-func boundType(fn function, name string) ast.Expr {
+func (x *indexer) hasReceiverType(packageID, name string) bool {
+	prefix := name + "."
+	for key := range x.byPackage[packageID] {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func boundExpression(fn function, name string, before token.Pos) ast.Expr {
 	for _, fields := range []*ast.FieldList{fn.decl.Recv, fn.decl.Type.Params} {
 		if fields == nil {
 			continue
@@ -637,21 +652,33 @@ func boundType(fn function, name string) ast.Expr {
 		}
 	}
 	var result ast.Expr
+	var resultPosition token.Pos
 	ast.Inspect(fn.decl.Body, func(node ast.Node) bool {
-		if result != nil {
-			return false
-		}
 		if _, nested := node.(*ast.FuncLit); nested {
 			return false
 		}
-		declaration, ok := node.(*ast.ValueSpec)
-		if !ok || declaration.Type == nil {
-			return true
+		if node == nil || node.Pos() >= before {
+			return node == nil
 		}
-		for _, candidate := range declaration.Names {
-			if candidate.Name == name {
-				result = declaration.Type
-				return false
+		switch declaration := node.(type) {
+		case *ast.ValueSpec:
+			for index, candidate := range declaration.Names {
+				if candidate.Name != name || declaration.Pos() < resultPosition {
+					continue
+				}
+				if declaration.Type != nil {
+					result, resultPosition = declaration.Type, declaration.Pos()
+				} else if index < len(declaration.Values) {
+					result, resultPosition = declaration.Values[index], declaration.Pos()
+				}
+			}
+		case *ast.AssignStmt:
+			for index, left := range declaration.Lhs {
+				candidate, ok := left.(*ast.Ident)
+				if !ok || candidate.Name != name || index >= len(declaration.Rhs) || declaration.Pos() < resultPosition {
+					continue
+				}
+				result, resultPosition = declaration.Rhs[index], declaration.Pos()
 			}
 		}
 		return true
@@ -679,7 +706,17 @@ func (x *indexer) connect() {
 			}
 			x.connectDataflow(fn, call)
 			name := strings.ToUpper(callName)
-			if strings.Contains(name, "HANDLEFUNC") || name == "GET" || name == "POST" || name == "PUT" || name == "PATCH" || name == "DELETE" || strings.HasSuffix(name, ".GET") || strings.HasSuffix(name, ".POST") || strings.HasSuffix(name, ".PUT") || strings.HasSuffix(name, ".PATCH") || strings.HasSuffix(name, ".DELETE") {
+			handlerID := ""
+			for index := len(call.Args) - 1; index >= 0; index-- {
+				candidate, _ := x.resolveTarget(fn, call.Args[index])
+				if kind := x.nodes[candidate].Kind; kind == "function" || kind == "method" {
+					handlerID = candidate
+					break
+				}
+			}
+			handleRegistration := strings.Contains(name, "HANDLEFUNC")
+			verbRegistration := name == "GET" || name == "POST" || name == "PUT" || name == "PATCH" || name == "DELETE" || strings.HasSuffix(name, ".GET") || strings.HasSuffix(name, ".POST") || strings.HasSuffix(name, ".PUT") || strings.HasSuffix(name, ".PATCH") || strings.HasSuffix(name, ".DELETE")
+			if handleRegistration || verbRegistration && handlerID != "" {
 				path := ""
 				for _, arg := range call.Args {
 					if value := literalString(arg); strings.HasPrefix(value, "/") {
@@ -697,13 +734,8 @@ func (x *indexer) connect() {
 					}
 					id := stableID("endpoint", method+" "+path)
 					x.nodes[id] = Node{ID: id, Kind: "endpoint", Label: method + " " + path, Service: x.serviceID, File: fn.node.File}
-					handlerID := fn.node.ID
-					for index := len(call.Args) - 1; index >= 0; index-- {
-						candidate, _ := x.resolveTarget(fn, call.Args[index])
-						if kind := x.nodes[candidate].Kind; kind == "function" || kind == "method" {
-							handlerID = candidate
-							break
-						}
+					if handlerID == "" {
+						handlerID = fn.node.ID
 					}
 					x.addEdge(id, "calls", handlerID, "handler", x.sourceLocation(call.Pos()))
 				}

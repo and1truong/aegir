@@ -226,8 +226,8 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 	for path, body := range map[string]string{
 		".git/HEAD":          "0123456789abcdef\n",
 		"go.mod":             "module example.com/routes\n\ngo 1.24\n",
-		"orders/handler.go":  "package orders\ntype Handler struct{}\nfunc (h *Handler) Handle() {}\n",
-		"routes/register.go": "package routes\nimport \"example.com/routes/orders\"\ntype Router struct{}\nfunc (Router) GET(string, any) {}\nfunc Register(router Router, h *orders.Handler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.Handler).Handle) }\n",
+		"orders/handler.go":  "package orders\ntype AdminHandler struct{}\ntype PublicHandler struct{}\nfunc (h *AdminHandler) Handle() {}\nfunc (h *PublicHandler) Handle() {}\nfunc NewHandler() *PublicHandler { return &PublicHandler{} }\n",
+		"routes/register.go": "package routes\nimport \"example.com/routes/orders\"\ntype Router struct{}\ntype Cache struct{}\nfunc (Router) GET(string, any) {}\nfunc (Cache) Get(string) {}\nfunc Register(router Router, cache Cache, h *orders.PublicHandler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.PublicHandler).Handle); fromConstructor := orders.NewHandler(); router.GET(\"/constructor\", fromConstructor.Handle); literal := &orders.PublicHandler{}; router.GET(\"/literal\", literal.Handle); cache.Get(\"/config\") }\n",
 	} {
 		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -243,10 +243,10 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 	}
 	endpointIDs, handlerID := map[string]bool{}, ""
 	for _, node := range snapshot.Nodes {
-		if node.Kind == "endpoint" && (node.Label == "GET /orders" || node.Label == "GET /method-expression") {
+		if node.Kind == "endpoint" {
 			endpointIDs[node.ID] = true
 		}
-		if node.Kind == "method" && node.Label == "Handler.Handle" {
+		if node.Kind == "method" && node.Label == "PublicHandler.Handle" {
 			handlerID = node.ID
 		}
 	}
@@ -256,7 +256,7 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 			connected++
 		}
 	}
-	if len(endpointIDs) != 2 || connected != 2 {
+	if len(endpointIDs) != 4 || connected != 4 {
 		t.Fatalf("endpoints %v were not connected to injected callback %q: %#v", endpointIDs, handlerID, snapshot.Edges)
 	}
 }

@@ -1,6 +1,6 @@
 package attention
 
-const ModelVersion = "attention-v1.17"
+const ModelVersion = "attention-v1.18"
 
 type EvidenceRef struct {
 	Kind string `json:"kind"`

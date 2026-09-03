@@ -657,7 +657,7 @@ func (x *indexer) receiverPackageName(fn function, expression ast.Expr) string {
 				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
 					continue
 				}
-				return x.receiverPackageName(candidate, candidate.decl.Type.Results.List[0].Type)
+				return x.receiverPackageNameWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value.Fun))
 			}
 		}
 	}
@@ -720,11 +720,52 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
 					continue
 				}
-				return x.receiverReference(candidate, candidate.decl.Type.Results.List[0].Type)
+				return x.receiverReferenceWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value.Fun))
 			}
 		}
 	}
 	return "", ""
+}
+
+func callTypeArguments(caller, callee function, expression ast.Expr) map[string]typeArgument {
+	var arguments []ast.Expr
+	switch value := expression.(type) {
+	case *ast.IndexExpr:
+		arguments = []ast.Expr{value.Index}
+	case *ast.IndexListExpr:
+		arguments = value.Indices
+	default:
+		return nil
+	}
+	if callee.decl.Type.TypeParams == nil {
+		return nil
+	}
+	types := map[string]typeArgument{}
+	index := 0
+	for _, field := range callee.decl.Type.TypeParams.List {
+		for _, name := range field.Names {
+			if index >= len(arguments) {
+				return nil
+			}
+			types[name.Name] = typeArgument{fn: caller, expression: arguments[index]}
+			index++
+		}
+	}
+	return types
+}
+
+func (x *indexer) receiverPackageNameWithTypes(fn function, expression ast.Expr, types map[string]typeArgument) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if argument, ok := types[value.Name]; ok {
+			return x.receiverPackageNameWithTypes(argument.fn, argument.expression, argument.types)
+		}
+	case *ast.StarExpr:
+		return x.receiverPackageNameWithTypes(fn, value.X, types)
+	case *ast.ParenExpr:
+		return x.receiverPackageNameWithTypes(fn, value.X, types)
+	}
+	return x.receiverPackageName(fn, expression)
 }
 
 func functionLookupKey(packageName, name string) string {

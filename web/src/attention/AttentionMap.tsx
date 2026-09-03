@@ -64,8 +64,8 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
     context.scale(ratio, ratio);
     context.clearRect(0, 0, size.width, size.height);
     const left = 58, right = size.width - 24, top = 25, bottom = size.height - 48;
-    const thresholdX = left + landscape.policy.complexityHigh / 100 * (right - left);
-    const thresholdY = top + (1 - landscape.policy.impactHigh / 100) * (bottom - top);
+    const thresholdX = left + zoomedScore(landscape.policy.complexityHigh, zoom) * (right - left);
+    const thresholdY = top + (1 - zoomedScore(landscape.policy.impactHigh, zoom)) * (bottom - top);
     context.fillStyle = 'rgba(251,113,133,.035)'; context.fillRect(thresholdX, top, right - thresholdX, thresholdY - top);
     context.fillStyle = 'rgba(56,189,248,.025)'; context.fillRect(left, top, thresholdX - left, thresholdY - top);
     context.fillStyle = 'rgba(245,158,11,.025)'; context.fillRect(thresholdX, thresholdY, right - thresholdX, bottom - thresholdY);
@@ -99,7 +99,7 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
       }
     }
     context.globalAlpha = 1;
-  }, [landscape, points, size, hovered, theme, touchedUnitIds]);
+  }, [landscape, points, size, hovered, theme, touchedUnitIds, zoom]);
 
   const findPoint = (event: MouseEvent<HTMLCanvasElement> | PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect(); const x = event.clientX - rect.left, y = event.clientY - rect.top;

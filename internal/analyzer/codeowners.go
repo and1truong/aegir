@@ -45,9 +45,12 @@ func codeOwnerPattern(value string) *regexp.Regexp {
 	if value == "" || strings.HasPrefix(value, "!") {
 		return nil
 	}
-	anchored := strings.HasPrefix(value, "/") || strings.Contains(strings.TrimPrefix(value, "/"), "/")
+	anchored := strings.HasPrefix(value, "/")
 	value = strings.TrimPrefix(value, "/")
-	if strings.HasSuffix(value, "/") {
+	trailingSlash := strings.HasSuffix(value, "/")
+	anchored = anchored || strings.Contains(strings.TrimSuffix(value, "/"), "/")
+	directoryMatch := !trailingSlash && !strings.ContainsAny(filepath.Base(value), "*?")
+	if trailingSlash {
 		value += "**"
 	}
 	var expression strings.Builder
@@ -73,6 +76,9 @@ func codeOwnerPattern(value string) *regexp.Regexp {
 			expression.WriteString(regexp.QuoteMeta(string(value[index])))
 			index++
 		}
+	}
+	if directoryMatch {
+		expression.WriteString("(?:/.*)?")
 	}
 	expression.WriteString("$")
 	pattern, err := regexp.Compile(expression.String())

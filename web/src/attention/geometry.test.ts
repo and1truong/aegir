@@ -15,6 +15,7 @@ test('bubble area grows with velocity while missing history stays visibly bounde
 
 test('zoom is deterministic and keeps every score in the visible domain', () => {
   assert.equal(zoomedScore(50, 3), .5);
+  assert.equal(zoomedScore(60, 2), .7);
   assert.equal(zoomedScore(0, 3), 0);
   assert.equal(zoomedScore(100, 3), 1);
   assert.deepEqual(stableJitter('package:a'), stableJitter('package:a'));

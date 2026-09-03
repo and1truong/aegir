@@ -83,6 +83,28 @@ func TestCalculateUsesAvailableRuntimeSignalAndP90Complexity(t *testing.T) {
 	}
 }
 
+func TestCalculateLeavesRuntimeUnavailableWithoutPackageTelemetry(t *testing.T) {
+	pkgA := analyzer.Node{ID: "pkg:a", Kind: "package", Label: "a"}
+	pkgB := analyzer.Node{ID: "pkg:b", Kind: "package", Label: "b"}
+	fnA := analyzer.Node{ID: "fn:a", Kind: "function", Package: pkgA.ID}
+	fnB := analyzer.Node{ID: "fn:b", Kind: "function", Package: pkgB.ID}
+	snapshot := analyzer.Snapshot{
+		Nodes:    []analyzer.Node{pkgA, pkgB, fnA, fnB},
+		Analysis: analyzer.Analysis{Telemetry: []analyzer.Telemetry{{NodeID: fnA.ID, RPM: 120}}},
+	}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	units := map[string]Unit{}
+	for _, unit := range landscape.Units {
+		units[unit.Unit.ID] = unit
+	}
+	if factor := factorByID(units[pkgA.ID].Impact, "runtime-traffic"); factor.Status != "observed" || factor.RawValue != 120 {
+		t.Fatalf("instrumented package runtime signal missing: %#v", factor)
+	}
+	if factor := factorByID(units[pkgB.ID].Impact, "runtime-traffic"); factor.Status != "unavailable" {
+		t.Fatalf("uninstrumented package runtime became observed zero: %#v", factor)
+	}
+}
+
 func TestCalculateDistinguishesUnavailableVelocityFromZero(t *testing.T) {
 	snapshot := analyzer.Snapshot{Nodes: []analyzer.Node{{ID: "pkg:a", Kind: "package", Label: "a"}}}
 	landscape := Calculate("repo", 1, snapshot, nil, 90, time.Now())
@@ -156,6 +178,31 @@ func TestCalculateUsesCodeOwnershipForCrossTeamFactors(t *testing.T) {
 			if unit.Unit.Team != "@one" || strings.Join(unit.Unit.Teams, ",") != "@one,@shared" || factor.Status != "observed" || factor.RawValue != 1 {
 				t.Fatalf("ownership signal missing: %#v", unit)
 			}
+		}
+	}
+}
+
+func TestCalculateLeavesCrossTeamFactorsUnavailableForUnknownRelationships(t *testing.T) {
+	owned := analyzer.Node{ID: "pkg:owned", Kind: "package", Label: "owned", Owner: "@one"}
+	unknown := analyzer.Node{ID: "pkg:unknown", Kind: "package", Label: "unknown"}
+	ownedFn := analyzer.Node{ID: "fn:owned", Kind: "function", Package: owned.ID}
+	unknownFn := analyzer.Node{ID: "fn:unknown", Kind: "function", Package: unknown.ID}
+	snapshot := analyzer.Snapshot{
+		Nodes: []analyzer.Node{owned, unknown, ownedFn, unknownFn},
+		Edges: []analyzer.Edge{
+			{ID: "unknown-owned", Source: unknownFn.ID, Target: ownedFn.ID, Kind: "calls"},
+			{ID: "owned-unknown", Source: ownedFn.ID, Target: unknownFn.ID, Kind: "calls"},
+		},
+	}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	for _, unit := range landscape.Units {
+		if unit.Unit.ID != owned.ID {
+			continue
+		}
+		incoming := factorByID(unit.Impact, "cross-team-dependents")
+		outgoing := factorByID(unit.ChangeComplexity, "cross-team-dependencies")
+		if incoming.Status != "unavailable" || outgoing.Status != "unavailable" {
+			t.Fatalf("unknown relationship ownership became observed zero: incoming=%#v outgoing=%#v", incoming, outgoing)
 		}
 	}
 }

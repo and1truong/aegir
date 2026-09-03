@@ -15,30 +15,33 @@ import (
 var dependencyKinds = map[string]bool{"calls": true, "depends_on": true}
 
 type packageFacts struct {
-	node                analyzer.Node
-	members             []string
-	incoming            map[string]bool
-	outgoing            map[string]bool
-	edges               map[string]bool
-	incomingEdges       map[string]bool
-	outgoingEdges       map[string]bool
-	boundaries          map[string]bool
-	boundaryEdges       map[string]bool
-	stateEdges          map[string]bool
-	asyncEdges          map[string]bool
-	sharedUnits         map[string]bool
-	crossTeamDependents map[string]bool
-	crossTeamEdges      map[string]bool
-	outgoingTeamEdges   map[string]bool
-	transitiveCount     int
-	transitiveEdges     map[string]bool
-	centrality          float64
-	inCycle             bool
-	localComplexity     float64
-	complexities        []float64
-	contracts           int
-	runtimeTraffic      float64
-	velocity            velocityFacts
+	node                 analyzer.Node
+	members              []string
+	incoming             map[string]bool
+	outgoing             map[string]bool
+	edges                map[string]bool
+	incomingEdges        map[string]bool
+	outgoingEdges        map[string]bool
+	boundaries           map[string]bool
+	boundaryEdges        map[string]bool
+	stateEdges           map[string]bool
+	asyncEdges           map[string]bool
+	sharedUnits          map[string]bool
+	crossTeamDependents  map[string]bool
+	crossTeamEdges       map[string]bool
+	outgoingTeamEdges    map[string]bool
+	incomingOwnerUnknown bool
+	outgoingOwnerUnknown bool
+	transitiveCount      int
+	transitiveEdges      map[string]bool
+	centrality           float64
+	inCycle              bool
+	localComplexity      float64
+	complexities         []float64
+	contracts            int
+	runtimeTraffic       float64
+	runtimeObserved      bool
+	velocity             velocityFacts
 }
 
 type velocityFacts struct {
@@ -115,7 +118,10 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 		facts[targetUnit].incoming[sourceUnit] = true
 		facts[targetUnit].edges[edge.ID] = true
 		facts[targetUnit].incomingEdges[edge.ID] = true
-		if ownersDiffer(facts[sourceUnit].node, facts[targetUnit].node) {
+		if len(nodeOwners(facts[sourceUnit].node)) == 0 || len(nodeOwners(facts[targetUnit].node)) == 0 {
+			facts[targetUnit].incomingOwnerUnknown = true
+			facts[sourceUnit].outgoingOwnerUnknown = true
+		} else if ownersDiffer(facts[sourceUnit].node, facts[targetUnit].node) {
 			facts[targetUnit].crossTeamDependents[sourceUnit] = true
 			facts[targetUnit].crossTeamEdges[edge.ID] = true
 			facts[sourceUnit].outgoingTeamEdges[edge.ID] = true
@@ -162,6 +168,7 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 	}
 	for _, telemetry := range snapshot.Analysis.Telemetry {
 		if unit := nodePackage[telemetry.NodeID]; unit != "" {
+			facts[unit].runtimeObserved = true
 			facts[unit].runtimeTraffic += math.Max(telemetry.RPM, telemetry.QPS*60)
 		}
 	}
@@ -224,10 +231,16 @@ func collectValues(facts map[string]*packageFacts) valueSets {
 		values.state = append(values.state, float64(len(item.stateEdges)))
 		values.async = append(values.async, float64(len(item.asyncEdges)))
 		values.shared = append(values.shared, float64(len(item.sharedUnits)))
-		values.crossTeamIncoming = append(values.crossTeamIncoming, float64(len(item.crossTeamDependents)))
-		values.crossTeamOutgoing = append(values.crossTeamOutgoing, float64(len(item.outgoingTeamEdges)))
+		if ownershipAvailable(item, !item.incomingOwnerUnknown) {
+			values.crossTeamIncoming = append(values.crossTeamIncoming, float64(len(item.crossTeamDependents)))
+		}
+		if ownershipAvailable(item, !item.outgoingOwnerUnknown) {
+			values.crossTeamOutgoing = append(values.crossTeamOutgoing, float64(len(item.outgoingTeamEdges)))
+		}
 		values.contracts = append(values.contracts, float64(item.contracts))
-		values.runtime = append(values.runtime, item.runtimeTraffic)
+		if item.runtimeObserved {
+			values.runtime = append(values.runtime, item.runtimeTraffic)
+		}
 		values.churn = append(values.churn, item.velocity.churn)
 		values.changes = append(values.changes, item.velocity.changes)
 		values.topology = append(values.topology, item.velocity.topology)
@@ -243,10 +256,10 @@ func impactDimension(item *packageFacts, total int, values valueSets) Dimension 
 		observed("transitive-reach", "Transitive dependent reach", float64(item.transitiveCount), "packages", .15, ratio(item.transitiveCount, max(1, total-1)), edgeRefs(item.transitiveEdges)),
 		observed("dependency-brokerage", "Dependency brokerage", item.centrality, "normalized", .15, item.centrality, edgeRefs(item.edges)),
 		observed("shared-resource-reach", "Shared state and event reach", float64(len(item.sharedUnits)), "packages", .10, normalize(float64(len(item.sharedUnits)), values.shared), edgeRefs(item.stateEdges, item.asyncEdges)),
-		ownershipFactor("cross-team-dependents", "Cross-team dependents", float64(len(item.crossTeamDependents)), "packages", .10, normalize(float64(len(item.crossTeamDependents)), values.crossTeamIncoming), edgeRefs(item.crossTeamEdges), item.node.Owner),
+		ownershipFactor("cross-team-dependents", "Cross-team dependents", float64(len(item.crossTeamDependents)), "packages", .10, normalize(float64(len(item.crossTeamDependents)), values.crossTeamIncoming), edgeRefs(item.crossTeamEdges), ownershipAvailable(item, !item.incomingOwnerUnknown)),
 		observed("owned-contracts", "Owned contracts", float64(item.contracts), "contracts", .10, normalize(float64(item.contracts), values.contracts), nil),
 	}
-	if hasPositive(values.runtime) {
+	if item.runtimeObserved {
 		factors = append(factors, observed("runtime-traffic", "Observed runtime traffic", item.runtimeTraffic, "requests/min", .10, normalize(item.runtimeTraffic, values.runtime), nil))
 	} else {
 		factors = append(factors, Factor{ID: "runtime-traffic", Label: "Observed runtime traffic", Weight: .10, Status: "unavailable", EvidenceRefs: []EvidenceRef{}})
@@ -263,7 +276,7 @@ func complexityDimension(item *packageFacts, values valueSets) Dimension {
 	factors := []Factor{
 		observed("fan-out", "Dependency fan-out", float64(len(item.outgoing)), "packages", .15, normalize(float64(len(item.outgoing)), values.outgoing), edgeRefs(item.outgoingEdges)),
 		observed("boundary-variety", "Technical boundary variety", float64(len(item.boundaries)), "boundary types", .15, normalize(float64(len(item.boundaries)), values.boundaries), edgeRefs(item.boundaryEdges)),
-		ownershipFactor("cross-team-dependencies", "Cross-team dependencies", float64(len(item.outgoingTeamEdges)), "relationships", .10, normalize(float64(len(item.outgoingTeamEdges)), values.crossTeamOutgoing), edgeRefs(item.outgoingTeamEdges), item.node.Owner),
+		ownershipFactor("cross-team-dependencies", "Cross-team dependencies", float64(len(item.outgoingTeamEdges)), "relationships", .10, normalize(float64(len(item.outgoingTeamEdges)), values.crossTeamOutgoing), edgeRefs(item.outgoingTeamEdges), ownershipAvailable(item, !item.outgoingOwnerUnknown)),
 		observed("stateful-dependencies", "Stateful dependencies", float64(len(item.stateEdges)), "relationships", .15, normalize(float64(len(item.stateEdges)), values.state), edgeRefs(item.stateEdges)),
 		observed("async-dependencies", "Async and event dependencies", float64(len(item.asyncEdges)), "relationships", .15, normalize(float64(len(item.asyncEdges)), values.async), edgeRefs(item.asyncEdges)),
 		observed("cycle-participation", "Dependency cycle participation", cycle, "boolean", .15, cycle, edgeRefs(item.edges)),
@@ -291,11 +304,15 @@ func observed(id, label string, raw float64, unit string, weight, normalized flo
 	return Factor{ID: id, Label: label, RawValue: raw, DisplayValue: displayValue(raw, unit), Normalized: clamp(normalized), Weight: weight, Status: "observed", EvidenceRefs: evidence}
 }
 
-func ownershipFactor(id, label string, raw float64, unit string, weight, normalized float64, evidence []EvidenceRef, owner string) Factor {
-	if owner == "" {
+func ownershipFactor(id, label string, raw float64, unit string, weight, normalized float64, evidence []EvidenceRef, available bool) Factor {
+	if !available {
 		return Factor{ID: id, Label: label, Weight: weight, Status: "unavailable", EvidenceRefs: []EvidenceRef{}}
 	}
 	return observed(id, label, raw, unit, weight, normalized, evidence)
+}
+
+func ownershipAvailable(item *packageFacts, relationshipsKnown bool) bool {
+	return len(nodeOwners(item.node)) > 0 && relationshipsKnown
 }
 
 func hasOwnership(facts map[string]*packageFacts) bool {
@@ -611,15 +628,6 @@ func percentile(sorted []float64, quantile float64) float64 {
 	}
 	index := int(math.Ceil(float64(len(sorted))*quantile)) - 1
 	return sorted[max(0, min(index, len(sorted)-1))]
-}
-
-func hasPositive(values []float64) bool {
-	for _, value := range values {
-		if value > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func displayValue(raw float64, unit string) string {

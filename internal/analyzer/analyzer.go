@@ -185,6 +185,7 @@ type packageFile struct {
 type typeArgument struct {
 	fn         function
 	expression ast.Expr
+	types      map[string]typeArgument
 }
 
 type indexer struct {
@@ -512,9 +513,9 @@ func (x *indexer) collect() error {
 			n := Node{ID: id, Kind: kind, Label: label, Service: x.serviceID, Package: pkgID, File: fmt.Sprintf("%s:%d", rel, pos.Line), Owner: firstOwner(owners), Owners: owners, Meta: map[string]any{"exported": ast.IsExported(fn.Name.Name), "startLine": pos.Line, "endLine": end.Line, "fingerprint": fingerprint}}
 			x.nodes[id] = n
 			if kind != "method" {
-				x.byPackage[pkgID][fn.Name.Name] = id
+				x.byPackage[pkgID][functionLookupKey(parsed.Name.Name, fn.Name.Name)] = id
 			}
-			x.byPackage[pkgID][label] = id
+			x.byPackage[pkgID][functionLookupKey(parsed.Name.Name, label)] = id
 			x.functions = append(x.functions, function{node: n, pkgDir: filepath.Dir(path), packageID: pkgID, packageName: parsed.Name.Name, decl: fn, file: parsed, imports: imports, isTest: isTest})
 			x.addEdge(pkgID, "owns", id, "declares", x.sourceLocation(fn.Pos()))
 		}
@@ -583,12 +584,12 @@ func (x *indexer) resolveCall(fn function, call *ast.CallExpr) (string, string) 
 func (x *indexer) resolveTarget(fn function, expression ast.Expr) (string, string) {
 	switch target := expression.(type) {
 	case *ast.Ident:
-		return x.byPackage[fn.packageID][target.Name], target.Name
+		return x.functionID(fn.packageID, fn.packageName, target.Name), target.Name
 	case *ast.SelectorExpr:
 		if ident, ok := target.X.(*ast.Ident); ok {
 			if importPath := fn.imports[ident.Name]; importPath != "" {
 				if packageID, local := x.localPackageID(importPath); local {
-					if id := x.byPackage[packageID][target.Sel.Name]; id != "" {
+					if id := x.functionID(packageID, x.primaryPackageName(packageID), target.Sel.Name); id != "" {
 						return id, importPath + "." + target.Sel.Name
 					}
 					return packageID, importPath + "." + target.Sel.Name
@@ -597,7 +598,11 @@ func (x *indexer) resolveTarget(fn function, expression ast.Expr) (string, strin
 			}
 		}
 		if packageID, receiverType := x.receiverReference(fn, target.X); packageID != "" && receiverType != "" {
-			if id := x.byPackage[packageID][receiverType+"."+target.Sel.Name]; id != "" {
+			packageName := x.primaryPackageName(packageID)
+			if packageID == fn.packageID {
+				packageName = fn.packageName
+			}
+			if id := x.functionID(packageID, packageName, receiverType+"."+target.Sel.Name); id != "" {
 				return id, target.Sel.Name
 			}
 		}
@@ -623,7 +628,7 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 		if packageFn, bound, ok := x.packageValueExpression(fn, value.Name); ok {
 			return x.receiverReference(packageFn, bound)
 		}
-		if x.hasReceiverType(fn.packageID, value.Name) {
+		if x.hasReceiverType(fn, value.Name) {
 			return fn.packageID, value.Name
 		}
 		return "", ""
@@ -648,11 +653,8 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 	case *ast.CompositeLit:
 		return x.receiverReference(fn, value.Type)
 	case *ast.CallExpr:
-		if selector, ok := value.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "New" {
-			packageID, receiverType := x.receiverReference(fn, selector.X)
-			if receiverType == "" && strings.Contains(x.nodes[packageID].Label, "labstack/echo") {
-				return packageID, "Echo"
-			}
+		if packageID := x.echoConstructorPackage(fn, value.Fun); packageID != "" {
+			return packageID, "Echo"
 		}
 		if selector, ok := value.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Group" {
 			packageID, receiverType := x.receiverReference(fn, selector.X)
@@ -672,14 +674,46 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 	return "", ""
 }
 
-func (x *indexer) hasReceiverType(packageID, name string) bool {
-	prefix := name + "."
-	for key := range x.byPackage[packageID] {
+func functionLookupKey(packageName, name string) string {
+	return packageName + "\x00" + name
+}
+
+func (x *indexer) functionID(packageID, packageName, name string) string {
+	return x.byPackage[packageID][functionLookupKey(packageName, name)]
+}
+
+func (x *indexer) hasReceiverType(fn function, name string) bool {
+	prefix := functionLookupKey(fn.packageName, name+".")
+	for key := range x.byPackage[fn.packageID] {
 		if strings.HasPrefix(key, prefix) {
 			return true
 		}
 	}
 	return false
+}
+
+func (x *indexer) echoConstructorPackage(fn function, expression ast.Expr) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if value.Pos() != token.NoPos {
+			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+				return x.echoConstructorPackage(fn, bound)
+			}
+		}
+		if packageFn, bound, ok := x.packageValueExpression(fn, value.Name); ok {
+			return x.echoConstructorPackage(packageFn, bound)
+		}
+	case *ast.SelectorExpr:
+		if value.Sel.Name == "New" {
+			packageID, receiverType := x.receiverReference(fn, value.X)
+			if receiverType == "" && strings.Contains(x.nodes[packageID].Label, "labstack/echo") {
+				return packageID
+			}
+		}
+	case *ast.ParenExpr:
+		return x.echoConstructorPackage(fn, value.X)
+	}
+	return ""
 }
 
 func boundExpression(x *indexer, fn function, name string, before token.Pos) ast.Expr {
@@ -921,13 +955,7 @@ func (x *indexer) instantiatedIterableReceiver(fn function, base ast.Expr, argum
 			if index >= len(arguments) {
 				return "", ""
 			}
-			argument := typeArgument{fn: fn, expression: arguments[index]}
-			if identifier, ok := arguments[index].(*ast.Ident); ok {
-				if inheritedArgument, exists := inherited[identifier.Name]; exists {
-					argument = inheritedArgument
-				}
-			}
-			types[name.Name] = argument
+			types[name.Name] = typeArgument{fn: fn, expression: arguments[index], types: inherited}
 			index++
 		}
 	}
@@ -938,7 +966,7 @@ func (x *indexer) receiverReferenceWithTypes(fn function, expression ast.Expr, t
 	switch value := expression.(type) {
 	case *ast.Ident:
 		if argument, ok := types[value.Name]; ok {
-			return x.receiverReference(argument.fn, argument.expression)
+			return x.receiverReferenceWithTypes(argument.fn, argument.expression, argument.types)
 		}
 	case *ast.StarExpr:
 		return x.receiverReferenceWithTypes(fn, value.X, types)

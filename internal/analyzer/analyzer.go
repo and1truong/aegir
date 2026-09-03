@@ -657,7 +657,7 @@ func (x *indexer) receiverPackageName(fn function, expression ast.Expr) string {
 				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
 					continue
 				}
-				return x.receiverPackageNameWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value.Fun, nil))
+				return x.receiverPackageNameWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value, nil))
 			}
 		}
 	}
@@ -720,35 +720,54 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
 					continue
 				}
-				return x.receiverReferenceWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value.Fun, nil))
+				return x.receiverReferenceWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value, nil))
 			}
 		}
 	}
 	return "", ""
 }
 
-func callTypeArguments(caller, callee function, expression ast.Expr, inherited map[string]typeArgument) map[string]typeArgument {
+func callTypeArguments(caller, callee function, call *ast.CallExpr, inherited map[string]typeArgument) map[string]typeArgument {
 	var arguments []ast.Expr
-	switch value := expression.(type) {
+	switch value := call.Fun.(type) {
 	case *ast.IndexExpr:
 		arguments = []ast.Expr{value.Index}
 	case *ast.IndexListExpr:
 		arguments = value.Indices
-	default:
-		return inherited
 	}
 	if callee.decl.Type.TypeParams == nil {
 		return inherited
 	}
 	types := map[string]typeArgument{}
-	index := 0
+	typeParameters := map[string]bool{}
+	parameterNames := []string{}
 	for _, field := range callee.decl.Type.TypeParams.List {
 		for _, name := range field.Names {
-			if index >= len(arguments) {
-				return types
+			typeParameters[name.Name] = true
+			parameterNames = append(parameterNames, name.Name)
+		}
+	}
+	for index, argument := range arguments {
+		if index >= len(parameterNames) {
+			break
+		}
+		types[parameterNames[index]] = typeArgument{fn: caller, expression: argument, types: inherited}
+	}
+	argumentIndex := 0
+	if callee.decl.Type.Params != nil {
+		for _, field := range callee.decl.Type.Params.List {
+			count := len(field.Names)
+			if count == 0 {
+				count = 1
 			}
-			types[name.Name] = typeArgument{fn: caller, expression: arguments[index], types: inherited}
-			index++
+			for index := 0; index < count && argumentIndex < len(call.Args); index++ {
+				if parameter, ok := field.Type.(*ast.Ident); ok && typeParameters[parameter.Name] {
+					if _, exists := types[parameter.Name]; !exists {
+						types[parameter.Name] = typeArgument{fn: caller, expression: call.Args[argumentIndex], types: inherited}
+					}
+				}
+				argumentIndex++
+			}
 		}
 	}
 	return types
@@ -1009,7 +1028,7 @@ func (x *indexer) iterableReceiverWithTypes(fn function, expression ast.Expr, ke
 		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
 			for _, candidate := range x.functions {
 				if candidate.node.ID == id && candidate.decl.Type.Results != nil && len(candidate.decl.Type.Results.List) > 0 {
-					return x.iterableReceiverWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, key, callTypeArguments(fn, candidate, value.Fun, types))
+					return x.iterableReceiverWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, key, callTypeArguments(fn, candidate, value, types))
 				}
 			}
 		}
@@ -1028,6 +1047,32 @@ func (x *indexer) iterableReceiverWithTypes(fn function, expression ast.Expr, ke
 		return x.receiverReferenceWithTypes(fn, value.Value, types)
 	case *ast.ChanType:
 		return x.receiverReferenceWithTypes(fn, value.Value, types)
+	case *ast.FuncType:
+		if value.Params == nil || len(value.Params.List) == 0 {
+			return "", ""
+		}
+		yield, ok := value.Params.List[0].Type.(*ast.FuncType)
+		if !ok || yield.Params == nil {
+			return "", ""
+		}
+		yielded := []ast.Expr{}
+		for _, field := range yield.Params.List {
+			count := len(field.Names)
+			if count == 0 {
+				count = 1
+			}
+			for index := 0; index < count; index++ {
+				yielded = append(yielded, field.Type)
+			}
+		}
+		if len(yielded) == 0 {
+			return "", ""
+		}
+		index := 0
+		if !key && len(yielded) > 1 {
+			index = 1
+		}
+		return x.receiverReferenceWithTypes(fn, yielded[index], types)
 	case *ast.ParenExpr:
 		return x.iterableReceiverWithTypes(fn, value.X, key, types)
 	}

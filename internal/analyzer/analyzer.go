@@ -612,7 +612,7 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 		if packageID != "" && receiverType == "" {
 			return packageID, value.Sel.Name
 		}
-		return packageID, receiverType
+		return "", ""
 	case *ast.StarExpr:
 		return x.receiverReference(fn, value.X)
 	case *ast.ParenExpr:
@@ -623,6 +623,8 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 		return x.receiverReference(fn, value.X)
 	case *ast.UnaryExpr:
 		return x.receiverReference(fn, value.X)
+	case *ast.ChanType:
+		return x.receiverReference(fn, value.Value)
 	case *ast.CompositeLit:
 		return x.receiverReference(fn, value.Type)
 	case *ast.CallExpr:
@@ -749,6 +751,8 @@ func bindingFromScopedHeader(statement ast.Stmt, name string) ast.Expr {
 			return binding
 		}
 		initializer = value.Init
+	case *ast.CommClause:
+		return bindingFromStatement(value.Comm, name)
 	}
 	return bindingFromStatement(initializer, name)
 }
@@ -762,10 +766,13 @@ func containingStatements(node ast.Node, position token.Pos) []ast.Stmt {
 		switch scope := candidate.(type) {
 		case *ast.BlockStmt:
 			result = scope.List
+			return false
 		case *ast.CaseClause:
 			result = scope.Body
+			return false
 		case *ast.CommClause:
 			result = scope.Body
+			return false
 		}
 		return true
 	})
@@ -860,7 +867,7 @@ func routeReceiverName(name string) bool {
 		name = name[index+1:]
 	}
 	switch name {
-	case "r", "e", "router", "routes", "route", "mux", "engine", "group", "app", "api", "server":
+	case "r", "e", "router", "routes", "route", "mux", "engine", "group", "echo", "app", "api", "server":
 		return true
 	}
 	return strings.Contains(name, "router") || strings.Contains(name, "route") || strings.Contains(name, "mux")

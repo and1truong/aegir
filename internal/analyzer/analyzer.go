@@ -165,19 +165,21 @@ type Snapshot struct {
 }
 
 type function struct {
-	node      Node
-	pkgDir    string
-	packageID string
-	decl      *ast.FuncDecl
-	file      *ast.File
-	imports   map[string]string
-	isTest    bool
+	node        Node
+	pkgDir      string
+	packageID   string
+	packageName string
+	decl        *ast.FuncDecl
+	file        *ast.File
+	imports     map[string]string
+	isTest      bool
 }
 
 type packageFile struct {
-	packageID string
-	file      *ast.File
-	imports   map[string]string
+	packageID   string
+	packageName string
+	file        *ast.File
+	imports     map[string]string
 }
 
 type typeArgument struct {
@@ -478,7 +480,7 @@ func (x *indexer) collect() error {
 				x.addEdge(pkgID, "depends_on", extID, "imports", x.sourceLocation(spec.Pos()))
 			}
 		}
-		x.files = append(x.files, packageFile{packageID: pkgID, file: parsed, imports: imports})
+		x.files = append(x.files, packageFile{packageID: pkgID, packageName: parsed.Name.Name, file: parsed, imports: imports})
 		if x.byPackage[pkgID] == nil {
 			x.byPackage[pkgID] = map[string]string{}
 		}
@@ -513,7 +515,7 @@ func (x *indexer) collect() error {
 				x.byPackage[pkgID][fn.Name.Name] = id
 			}
 			x.byPackage[pkgID][label] = id
-			x.functions = append(x.functions, function{node: n, pkgDir: filepath.Dir(path), packageID: pkgID, decl: fn, file: parsed, imports: imports, isTest: isTest})
+			x.functions = append(x.functions, function{node: n, pkgDir: filepath.Dir(path), packageID: pkgID, packageName: parsed.Name.Name, decl: fn, file: parsed, imports: imports, isTest: isTest})
 			x.addEdge(pkgID, "owns", id, "declares", x.sourceLocation(fn.Pos()))
 		}
 		return nil
@@ -618,7 +620,7 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 				return x.receiverReference(fn, bound)
 			}
 		}
-		if packageFn, bound, ok := x.packageValueExpression(fn.packageID, value.Name); ok {
+		if packageFn, bound, ok := x.packageValueExpression(fn, value.Name); ok {
 			return x.receiverReference(packageFn, bound)
 		}
 		if x.hasReceiverType(fn.packageID, value.Name) {
@@ -646,6 +648,12 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 	case *ast.CompositeLit:
 		return x.receiverReference(fn, value.Type)
 	case *ast.CallExpr:
+		if selector, ok := value.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "New" {
+			packageID, receiverType := x.receiverReference(fn, selector.X)
+			if receiverType == "" && strings.Contains(x.nodes[packageID].Label, "labstack/echo") {
+				return packageID, "Echo"
+			}
+		}
 		if selector, ok := value.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Group" {
 			packageID, receiverType := x.receiverReference(fn, selector.X)
 			if routeReceiverName(receiverType) || receiverType == "" && routeReceiverName(expressionName(selector.X)) {
@@ -697,9 +705,9 @@ func boundExpression(x *indexer, fn function, name string, before token.Pos) ast
 	return fallback
 }
 
-func (x *indexer) packageValueExpression(packageID, name string) (function, ast.Expr, bool) {
+func (x *indexer) packageValueExpression(fn function, name string) (function, ast.Expr, bool) {
 	for _, source := range x.files {
-		if source.packageID != packageID {
+		if source.packageID != fn.packageID || source.packageName != fn.packageName {
 			continue
 		}
 		for _, declaration := range source.file.Decls {
@@ -716,7 +724,7 @@ func (x *indexer) packageValueExpression(packageID, name string) (function, ast.
 					if candidate.Name != name {
 						continue
 					}
-					context := function{packageID: packageID, file: source.file, imports: source.imports}
+					context := function{packageID: fn.packageID, packageName: source.packageName, file: source.file, imports: source.imports}
 					if index < len(value.Values) {
 						return context, value.Values[index], true
 					}
@@ -913,7 +921,13 @@ func (x *indexer) instantiatedIterableReceiver(fn function, base ast.Expr, argum
 			if index >= len(arguments) {
 				return "", ""
 			}
-			types[name.Name] = typeArgument{fn: fn, expression: arguments[index]}
+			argument := typeArgument{fn: fn, expression: arguments[index]}
+			if identifier, ok := arguments[index].(*ast.Ident); ok {
+				if inheritedArgument, exists := inherited[identifier.Name]; exists {
+					argument = inheritedArgument
+				}
+			}
+			types[name.Name] = argument
 			index++
 		}
 	}
@@ -943,7 +957,7 @@ func (x *indexer) namedTypeExpression(fn function, expression ast.Expr) (functio
 }
 
 func (x *indexer) namedTypeSpec(fn function, expression ast.Expr) (function, *ast.TypeSpec, bool) {
-	packageID, name := fn.packageID, ""
+	packageID, packageName, name := fn.packageID, fn.packageName, ""
 	switch value := expression.(type) {
 	case *ast.Ident:
 		name = value.Name
@@ -958,12 +972,13 @@ func (x *indexer) namedTypeSpec(fn function, expression ast.Expr) (function, *as
 		if !local {
 			return function{}, nil, false
 		}
+		packageName = x.primaryPackageName(packageID)
 		name = value.Sel.Name
 	default:
 		return function{}, nil, false
 	}
 	for _, source := range x.files {
-		if source.packageID != packageID {
+		if source.packageID != packageID || source.packageName != packageName {
 			continue
 		}
 		for _, declaration := range source.file.Decls {
@@ -974,13 +989,22 @@ func (x *indexer) namedTypeSpec(fn function, expression ast.Expr) (function, *as
 			for _, spec := range general.Specs {
 				typeSpec, ok := spec.(*ast.TypeSpec)
 				if ok && typeSpec.Name.Name == name {
-					context := function{packageID: packageID, file: source.file, imports: source.imports}
+					context := function{packageID: packageID, packageName: source.packageName, file: source.file, imports: source.imports}
 					return context, typeSpec, true
 				}
 			}
 		}
 	}
 	return function{}, nil, false
+}
+
+func (x *indexer) primaryPackageName(packageID string) string {
+	for _, source := range x.files {
+		if source.packageID == packageID && !strings.HasSuffix(source.packageName, "_test") {
+			return source.packageName
+		}
+	}
+	return ""
 }
 
 func containingStatements(node ast.Node, position token.Pos) []ast.Stmt {
@@ -1095,7 +1119,7 @@ func (x *indexer) groupPrefix(fn function, expression ast.Expr) string {
 		if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
 			return x.groupPrefix(fn, bound)
 		}
-		if packageFn, bound, ok := x.packageValueExpression(fn.packageID, value.Name); ok {
+		if packageFn, bound, ok := x.packageValueExpression(fn, value.Name); ok {
 			return x.groupPrefix(packageFn, bound)
 		}
 	case *ast.CallExpr:

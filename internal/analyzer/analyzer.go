@@ -745,7 +745,7 @@ func callTypeArguments(caller, callee function, expression ast.Expr, inherited m
 	for _, field := range callee.decl.Type.TypeParams.List {
 		for _, name := range field.Names {
 			if index >= len(arguments) {
-				return inherited
+				return types
 			}
 			types[name.Name] = typeArgument{fn: caller, expression: arguments[index], types: inherited}
 			index++
@@ -986,7 +986,7 @@ func (x *indexer) iterableReceiverWithTypes(fn function, expression ast.Expr, ke
 	switch value := expression.(type) {
 	case *ast.Ident:
 		if argument, ok := types[value.Name]; ok {
-			return x.receiverReference(argument.fn, argument.expression)
+			return x.iterableReceiverWithTypes(argument.fn, argument.expression, key, argument.types)
 		}
 		if value.Pos() != token.NoPos {
 			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {

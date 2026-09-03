@@ -47,8 +47,10 @@ jobs:
       - name: Test Go
         run: go test ./...
 
-      - name: Test, type-check, and build frontend
+      - name: Test, type-check, and embed frontend
         run: |
           npm --prefix web test
           npm --prefix web run typecheck
           npm --prefix web run build
+          go generate ./internal/frontend
+          go build ./cmd/aegir

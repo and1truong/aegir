@@ -5,6 +5,7 @@ before:
   hooks:
     - npm --prefix web ci
     - npm --prefix web run build
+    - go generate ./internal/frontend
 
 builds:
   - id: aegir
@@ -25,33 +26,12 @@ builds:
       - amd64
       - arm64
 
-  - id: aegir-analyzer
-    main: ./cmd/aegir-analyzer
-    binary: aegir-analyzer
-    env:
-      - CGO_ENABLED=0
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w
-    goos:
-      - darwin
-      - linux
-      - windows
-    goarch:
-      - amd64
-      - arm64
-
 archives:
   - id: default
     ids:
       - aegir
-      - aegir-analyzer
     formats:
       - tar.gz
-    files:
-      - README.md
-      - web/dist/**
 
 checksum:
   name_template: "checksums.txt"

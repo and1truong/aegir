@@ -3,8 +3,8 @@
 build:
 	npm --prefix web ci
 	npm --prefix web run build
+	go generate ./internal/frontend
 	go build -o bin/aegir ./cmd/aegir
-	go build -o bin/aegir-analyzer ./cmd/aegir-analyzer
 
 test:
 	go test ./...

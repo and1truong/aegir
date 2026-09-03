@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"github.com/and1truong/aegir/internal/attention"
 	contractdiff "github.com/and1truong/aegir/internal/contracts"
@@ -146,6 +147,28 @@ func TestRepositoryIndexAndImpactFlow(t *testing.T) {
 	}
 	if len(diff.Changes) != 1 || diff.Changes[0].Compatibility != "break" {
 		t.Fatalf("unexpected contract diff: %#v", diff)
+	}
+}
+
+func TestServesEmbeddedFrontend(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "aegir.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	handler := NewWithFS(database, "", fstest.MapFS{
+		"index.html":    {Data: []byte("<html>embedded</html>")},
+		"assets/app.js": {Data: []byte("console.log('embedded')")},
+	})
+	for _, requestPath := range []string{"/", "/assets/app.js", "/repositories/example"} {
+		t.Run(requestPath, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, requestPath, nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 

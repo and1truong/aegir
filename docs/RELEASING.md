@@ -6,7 +6,7 @@ Release được tạo hoàn toàn từ GitHub Actions và được kích hoạt
 
 - CI (`.github/workflows/ci.yml`) chạy trên pull request và `main`: `gofmt`, `go vet`, Go tests, frontend tests, TypeScript type-check và frontend build.
 - Release workflow chạy lại `go vet` và Go tests, kiểm tra cấu hình GoReleaser, rồi dùng GoReleaser v2 để build cross-platform.
-- Mỗi archive chứa `aegir`, `aegir-analyzer`, `README.md`, và `web/dist/` đã build. Các target là macOS, Linux và Windows trên `amd64`/`arm64`; checksum SHA-256 của tất cả archive nằm trong `checksums.txt`.
+- Frontend đã build được embed vào `aegir`; mỗi archive chỉ chứa một executable `aegir`. Các target là macOS, Linux và Windows trên `amd64`/`arm64`; checksum SHA-256 của tất cả archive nằm trong `checksums.txt`.
 - `aegir version` (hoặc `aegir --version`) in đúng version của tag. Build local in `dev`.
 
 ## Quy trình release
@@ -22,12 +22,11 @@ Release được tạo hoàn toàn từ GitHub Actions và được kích hoạt
    ```
 
 3. Theo dõi workflow **Release** trên GitHub. Khi hoàn tất, GitHub Release có archive và `checksums.txt` sẽ được tạo tự động. Tag dạng prerelease, chẳng hạn `v0.1.0-rc.1`, được GoReleaser đánh dấu prerelease.
-4. Trước khi dùng archive, kiểm tra checksum, giải nén và chạy binary từ thư mục đã giải nén để đường dẫn mặc định `web/dist` được tìm thấy:
+4. Trước khi dùng archive, kiểm tra checksum, giải nén và chạy executable. Không cần frontend hoặc thư mục `web/dist` bên ngoài binary:
 
    ```sh
    shasum -a 256 -c checksums.txt
    tar -xzf aegir_0.1.0_linux_amd64.tar.gz
-   cd aegir_0.1.0_linux_amd64
    ./aegir serve
    ```
 
@@ -42,4 +41,4 @@ make lint test
 make release-snapshot
 ```
 
-Snapshot nằm ở `dist/`, không tạo Git tag hay GitHub Release. GoReleaser tự chạy `npm ci` và build frontend theo hooks trong `.goreleaser.yaml`; vì vậy không release từ worktree có thay đổi chưa commit.
+Snapshot nằm ở `dist/`, không tạo Git tag hay GitHub Release. GoReleaser tự chạy `npm ci`, build frontend và embed nó vào binary theo hooks trong `.goreleaser.yaml`; vì vậy không release từ worktree có thay đổi chưa commit.

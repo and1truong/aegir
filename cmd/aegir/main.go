@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/and1truong/aegir/internal/api"
+	"github.com/and1truong/aegir/internal/frontend"
 	"github.com/and1truong/aegir/internal/store"
 )
 
@@ -22,9 +23,9 @@ func main() {
 	serve := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := serve.String("addr", "127.0.0.1:4123", "HTTP listen address")
 	stateDir := serve.String("state-dir", ".aegir", "directory for persistent local state")
-	webDir := serve.String("web-dir", "web/dist", "built frontend directory")
+	webDir := serve.String("web-dir", "", "override embedded frontend with a built frontend directory")
 	if len(os.Args) < 2 || os.Args[1] != "serve" {
-		fmt.Fprintln(os.Stderr, "usage: aegir <serve|version>\n\n  aegir serve [--addr 127.0.0.1:4123] [--state-dir .aegir] [--web-dir web/dist]\n  aegir version")
+		fmt.Fprintln(os.Stderr, "usage: aegir <serve|version>\n\n  aegir serve [--addr 127.0.0.1:4123] [--state-dir .aegir] [--web-dir path]\n  aegir version")
 		os.Exit(2)
 	}
 	_ = serve.Parse(os.Args[2:])
@@ -36,7 +37,7 @@ func main() {
 	}
 	defer database.Close()
 	fmt.Printf("Aegir listening on http://%s (state %s)\n", *addr, dbPath)
-	if err := http.ListenAndServe(*addr, api.New(database, *webDir)); err != nil {
+	if err := http.ListenAndServe(*addr, api.NewWithFS(database, *webDir, frontend.Filesystem())); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

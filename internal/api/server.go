@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,10 +31,18 @@ import (
 type Server struct {
 	store  *store.Store
 	webDir string
+	webFS  fs.FS
 }
 
+// New serves frontend files from webDir. It is retained for local development and tests.
 func New(database *store.Store, webDir string) http.Handler {
-	s := &Server{store: database, webDir: webDir}
+	return NewWithFS(database, webDir, nil)
+}
+
+// NewWithFS serves frontend files from webDir when it is set, otherwise from webFS.
+// The latter is used by the standalone release binary.
+func NewWithFS(database *store.Store, webDir string, webFS fs.FS) http.Handler {
+	s := &Server{store: database, webDir: webDir, webFS: webFS}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/repositories", s.repositories)
@@ -611,19 +621,27 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("API route not found"))
 		return
 	}
-	if s.webDir == "" {
-		writeError(w, 404, errors.New("frontend is not built; run npm --prefix web run build"))
-		return
-	}
-	clean := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
+	clean := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+	if clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
 		writeError(w, http.StatusBadRequest, errors.New("invalid asset path"))
 		return
 	}
 	if clean == "." {
 		clean = "index.html"
 	}
-	candidate := filepath.Join(s.webDir, clean)
+	if s.webDir != "" {
+		s.serveDiskFrontend(w, r, clean)
+		return
+	}
+	if s.webFS != nil {
+		s.serveEmbeddedFrontend(w, r, clean)
+		return
+	}
+	writeError(w, http.StatusNotFound, errors.New("frontend is not built; run npm --prefix web run build"))
+}
+
+func (s *Server) serveDiskFrontend(w http.ResponseWriter, r *http.Request, clean string) {
+	candidate := filepath.Join(s.webDir, filepath.FromSlash(clean))
 	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 		http.ServeFile(w, r, candidate)
 		return
@@ -631,11 +649,28 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	index := filepath.Join(s.webDir, "index.html")
 	if _, err := os.Stat(index); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			writeError(w, 404, errors.New("frontend build not found"))
+			writeError(w, http.StatusNotFound, errors.New("frontend build not found"))
 			return
 		}
-		writeError(w, 500, err)
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	http.ServeFile(w, r, index)
+}
+
+func (s *Server) serveEmbeddedFrontend(w http.ResponseWriter, r *http.Request, clean string) {
+	body, err := fs.ReadFile(s.webFS, clean)
+	if err != nil {
+		body, err = fs.ReadFile(s.webFS, "index.html")
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				writeError(w, http.StatusNotFound, errors.New("embedded frontend is not available"))
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		clean = "index.html"
+	}
+	http.ServeContent(w, r, clean, time.Time{}, bytes.NewReader(body))
 }

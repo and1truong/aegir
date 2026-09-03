@@ -11,18 +11,18 @@ import (
 )
 
 type telemetryInput struct {
-	NodeID    string  `json:"nodeId"`
-	Label     string  `json:"label"`
-	File      string  `json:"file"`
-	RPM       float64 `json:"rpm"`
-	QPS       float64 `json:"qps"`
-	P50       float64 `json:"p50"`
-	P95       float64 `json:"p95"`
-	P99       float64 `json:"p99"`
-	ErrorRate float64 `json:"errorRate"`
-	Window    string  `json:"window"`
-	Source    string  `json:"source"`
-	Note      string  `json:"note"`
+	NodeID    string   `json:"nodeId"`
+	Label     string   `json:"label"`
+	File      string   `json:"file"`
+	RPM       *float64 `json:"rpm"`
+	QPS       *float64 `json:"qps"`
+	P50       float64  `json:"p50"`
+	P95       float64  `json:"p95"`
+	P99       float64  `json:"p99"`
+	ErrorRate float64  `json:"errorRate"`
+	Window    string   `json:"window"`
+	Source    string   `json:"source"`
+	Note      string   `json:"note"`
 }
 
 func applyTelemetryFile(root, telemetryPath string, nodes map[string]Node, analysis *Analysis) error {
@@ -46,14 +46,21 @@ func applyTelemetryFile(root, telemetryPath string, nodes map[string]Node, analy
 		if strings.TrimSpace(input.Source) == "" || strings.TrimSpace(input.Window) == "" {
 			return fmt.Errorf("telemetry item %d: source and window are required", index+1)
 		}
-		if input.RPM == 0 && input.QPS == 0 && input.P50 == 0 && input.P95 == 0 && input.P99 == 0 && input.ErrorRate == 0 {
+		if input.RPM == nil && input.QPS == nil && input.P50 == 0 && input.P95 == 0 && input.P99 == 0 && input.ErrorRate == 0 {
 			return fmt.Errorf("telemetry item %d: at least one metric is required", index+1)
 		}
-		telemetry = append(telemetry, Telemetry{NodeID: nodeID, RPM: input.RPM, QPS: input.QPS, P50: input.P50, P95: input.P95, P99: input.P99, ErrorRate: input.ErrorRate, Window: input.Window, Source: input.Source, Note: input.Note})
+		telemetry = append(telemetry, Telemetry{NodeID: nodeID, RPM: metricValue(input.RPM), QPS: metricValue(input.QPS), TrafficObserved: input.RPM != nil || input.QPS != nil, P50: input.P50, P95: input.P95, P99: input.P99, ErrorRate: input.ErrorRate, Window: input.Window, Source: input.Source, Note: input.Note})
 	}
 	sort.Slice(telemetry, func(i, j int) bool { return telemetry[i].NodeID < telemetry[j].NodeID })
 	analysis.Telemetry = telemetry
 	return nil
+}
+
+func metricValue(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func resolveTelemetryNode(input telemetryInput, nodes map[string]Node) (string, error) {

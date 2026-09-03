@@ -126,16 +126,17 @@ type Analysis struct {
 }
 
 type Telemetry struct {
-	NodeID    string  `json:"nodeId"`
-	RPM       float64 `json:"rpm,omitempty"`
-	QPS       float64 `json:"qps,omitempty"`
-	P50       float64 `json:"p50,omitempty"`
-	P95       float64 `json:"p95,omitempty"`
-	P99       float64 `json:"p99,omitempty"`
-	ErrorRate float64 `json:"errorRate,omitempty"`
-	Window    string  `json:"window"`
-	Source    string  `json:"source"`
-	Note      string  `json:"note,omitempty"`
+	NodeID          string  `json:"nodeId"`
+	RPM             float64 `json:"rpm,omitempty"`
+	QPS             float64 `json:"qps,omitempty"`
+	TrafficObserved bool    `json:"trafficObserved,omitempty"`
+	P50             float64 `json:"p50,omitempty"`
+	P95             float64 `json:"p95,omitempty"`
+	P99             float64 `json:"p99,omitempty"`
+	ErrorRate       float64 `json:"errorRate,omitempty"`
+	Window          string  `json:"window"`
+	Source          string  `json:"source"`
+	Note            string  `json:"note,omitempty"`
 }
 
 type Complexity struct {

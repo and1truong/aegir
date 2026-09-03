@@ -88,6 +88,17 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 			filePackage[file] = unitID
 		}
 	}
+	telemetryPackage := map[string]string{}
+	for nodeID, unitID := range nodePackage {
+		telemetryPackage[nodeID] = unitID
+	}
+	for _, edge := range snapshot.Edges {
+		if source, ok := byID[edge.Source]; ok && source.Kind == "endpoint" && edge.Kind == "calls" {
+			if unit := nodePackage[edge.Target]; unit != "" {
+				telemetryPackage[edge.Source] = unit
+			}
+		}
+	}
 	resources := map[string]map[string]bool{}
 	for _, edge := range snapshot.Edges {
 		sourceUnit, targetUnit := nodePackage[edge.Source], nodePackage[edge.Target]
@@ -167,8 +178,8 @@ func Calculate(repositoryID string, snapshotID int64, snapshot analyzer.Snapshot
 		}
 	}
 	for _, telemetry := range snapshot.Analysis.Telemetry {
-		if unit := nodePackage[telemetry.NodeID]; unit != "" {
-			facts[unit].runtimeObserved = true
+		if unit := telemetryPackage[telemetry.NodeID]; unit != "" {
+			facts[unit].runtimeObserved = facts[unit].runtimeObserved || telemetry.TrafficObserved || telemetry.RPM != 0 || telemetry.QPS != 0
 			facts[unit].runtimeTraffic += math.Max(telemetry.RPM, telemetry.QPS*60)
 		}
 	}

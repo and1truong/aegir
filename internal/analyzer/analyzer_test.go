@@ -157,3 +157,29 @@ func TestRunIndexesFunctionsCallsTestsAndContracts(t *testing.T) {
 		t.Fatal("expected package cycle violation")
 	}
 }
+
+func TestApplyTelemetryTracksTrafficFieldPresence(t *testing.T) {
+	root := t.TempDir()
+	contents := `[
+		{"nodeId":"zero","rpm":0,"window":"5m","source":"test"},
+		{"nodeId":"latency","p99":120,"window":"5m","source":"test"}
+	]`
+	if err := os.WriteFile(filepath.Join(root, "telemetry.json"), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nodes := map[string]Node{
+		"zero":    {ID: "zero"},
+		"latency": {ID: "latency"},
+	}
+	analysis := Analysis{}
+	if err := applyTelemetryFile(root, "telemetry.json", nodes, &analysis); err != nil {
+		t.Fatal(err)
+	}
+	observed := map[string]bool{}
+	for _, telemetry := range analysis.Telemetry {
+		observed[telemetry.NodeID] = telemetry.TrafficObserved
+	}
+	if !observed["zero"] || observed["latency"] {
+		t.Fatalf("traffic presence not preserved: %#v", analysis.Telemetry)
+	}
+}

@@ -83,14 +83,14 @@ func TestCalculateUsesAvailableRuntimeSignalAndP90Complexity(t *testing.T) {
 	}
 }
 
-func TestCalculateLeavesRuntimeUnavailableWithoutPackageTelemetry(t *testing.T) {
+func TestCalculateLeavesRuntimeUnavailableWithoutPackageTrafficTelemetry(t *testing.T) {
 	pkgA := analyzer.Node{ID: "pkg:a", Kind: "package", Label: "a"}
 	pkgB := analyzer.Node{ID: "pkg:b", Kind: "package", Label: "b"}
 	fnA := analyzer.Node{ID: "fn:a", Kind: "function", Package: pkgA.ID}
 	fnB := analyzer.Node{ID: "fn:b", Kind: "function", Package: pkgB.ID}
 	snapshot := analyzer.Snapshot{
 		Nodes:    []analyzer.Node{pkgA, pkgB, fnA, fnB},
-		Analysis: analyzer.Analysis{Telemetry: []analyzer.Telemetry{{NodeID: fnA.ID, RPM: 120}}},
+		Analysis: analyzer.Analysis{Telemetry: []analyzer.Telemetry{{NodeID: fnA.ID, RPM: 120}, {NodeID: fnB.ID, P99: 200}}},
 	}
 	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
 	units := map[string]Unit{}
@@ -102,6 +102,22 @@ func TestCalculateLeavesRuntimeUnavailableWithoutPackageTelemetry(t *testing.T) 
 	}
 	if factor := factorByID(units[pkgB.ID].Impact, "runtime-traffic"); factor.Status != "unavailable" {
 		t.Fatalf("uninstrumented package runtime became observed zero: %#v", factor)
+	}
+}
+
+func TestCalculateResolvesEndpointTelemetryToHandlerPackage(t *testing.T) {
+	pkg := analyzer.Node{ID: "pkg:handler", Kind: "package", Label: "handler"}
+	handler := analyzer.Node{ID: "fn:handler", Kind: "function", Package: pkg.ID}
+	endpoint := analyzer.Node{ID: "endpoint:orders", Kind: "endpoint", Label: "POST /orders"}
+	snapshot := analyzer.Snapshot{
+		Nodes:    []analyzer.Node{pkg, handler, endpoint},
+		Edges:    []analyzer.Edge{{ID: "endpoint-handler", Source: endpoint.ID, Target: handler.ID, Kind: "calls", Label: "handler"}},
+		Analysis: analyzer.Analysis{Telemetry: []analyzer.Telemetry{{NodeID: endpoint.ID, RPM: 120, TrafficObserved: true}}},
+	}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	factor := factorByID(landscape.Units[0].Impact, "runtime-traffic")
+	if factor.Status != "observed" || factor.RawValue != 120 {
+		t.Fatalf("endpoint traffic was not attributed to handler package: %#v", factor)
 	}
 }
 

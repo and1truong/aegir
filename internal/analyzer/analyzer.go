@@ -174,6 +174,17 @@ type function struct {
 	isTest    bool
 }
 
+type packageFile struct {
+	packageID string
+	file      *ast.File
+	imports   map[string]string
+}
+
+type typeArgument struct {
+	fn         function
+	expression ast.Expr
+}
+
 type indexer struct {
 	root          string
 	module        string
@@ -184,6 +195,7 @@ type indexer struct {
 	edges         map[string]Edge
 	evidence      map[string]EvidenceRecord
 	functions     []function
+	files         []packageFile
 	byPackage     map[string]map[string]string
 	packages      map[string]string
 	packageOwners map[string]map[string]int
@@ -466,6 +478,7 @@ func (x *indexer) collect() error {
 				x.addEdge(pkgID, "depends_on", extID, "imports", x.sourceLocation(spec.Pos()))
 			}
 		}
+		x.files = append(x.files, packageFile{packageID: pkgID, file: parsed, imports: imports})
 		if x.byPackage[pkgID] == nil {
 			x.byPackage[pkgID] = map[string]string{}
 		}
@@ -605,6 +618,9 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 				return x.receiverReference(fn, bound)
 			}
 		}
+		if packageFn, bound, ok := x.packageValueExpression(fn.packageID, value.Name); ok {
+			return x.receiverReference(packageFn, bound)
+		}
 		if x.hasReceiverType(fn.packageID, value.Name) {
 			return fn.packageID, value.Name
 		}
@@ -659,6 +675,9 @@ func (x *indexer) hasReceiverType(packageID, name string) bool {
 }
 
 func boundExpression(x *indexer, fn function, name string, before token.Pos) ast.Expr {
+	if fn.decl == nil {
+		return nil
+	}
 	var fallback ast.Expr
 	for _, fields := range []*ast.FieldList{fn.decl.Recv, fn.decl.Type.Params} {
 		if fields == nil {
@@ -676,6 +695,39 @@ func boundExpression(x *indexer, fn function, name string, before token.Pos) ast
 		return result
 	}
 	return fallback
+}
+
+func (x *indexer) packageValueExpression(packageID, name string) (function, ast.Expr, bool) {
+	for _, source := range x.files {
+		if source.packageID != packageID {
+			continue
+		}
+		for _, declaration := range source.file.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || general.Tok != token.VAR && general.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range general.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for index, candidate := range value.Names {
+					if candidate.Name != name {
+						continue
+					}
+					context := function{packageID: packageID, file: source.file, imports: source.imports}
+					if index < len(value.Values) {
+						return context, value.Values[index], true
+					}
+					if value.Type != nil {
+						return context, value.Type, true
+					}
+				}
+			}
+		}
+	}
+	return function{}, nil, false
 }
 
 func bindingInBlock(x *indexer, fn function, block *ast.BlockStmt, name string, before token.Pos) ast.Expr {
@@ -791,51 +843,106 @@ func (x *indexer) rangeBinding(fn function, statement *ast.RangeStmt, name strin
 }
 
 func (x *indexer) iterableReceiver(fn function, expression ast.Expr, key bool) (string, string) {
+	return x.iterableReceiverWithTypes(fn, expression, key, nil)
+}
+
+func (x *indexer) iterableReceiverWithTypes(fn function, expression ast.Expr, key bool, types map[string]typeArgument) (string, string) {
 	switch value := expression.(type) {
 	case *ast.Ident:
+		if argument, ok := types[value.Name]; ok {
+			return x.receiverReference(argument.fn, argument.expression)
+		}
 		if value.Pos() != token.NoPos {
 			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
-				return x.iterableReceiver(fn, bound, key)
+				return x.iterableReceiverWithTypes(fn, bound, key, types)
 			}
 		}
 		if typeFn, underlying, ok := x.namedTypeExpression(fn, value); ok {
-			return x.iterableReceiver(typeFn, underlying, key)
+			return x.iterableReceiverWithTypes(typeFn, underlying, key, types)
 		}
 	case *ast.SelectorExpr:
 		if typeFn, underlying, ok := x.namedTypeExpression(fn, value); ok {
-			return x.iterableReceiver(typeFn, underlying, key)
+			return x.iterableReceiverWithTypes(typeFn, underlying, key, types)
 		}
 	case *ast.CompositeLit:
-		return x.iterableReceiver(fn, value.Type, key)
+		return x.iterableReceiverWithTypes(fn, value.Type, key, types)
 	case *ast.CallExpr:
 		if identifier, ok := value.Fun.(*ast.Ident); ok && identifier.Name == "make" && len(value.Args) > 0 {
-			return x.iterableReceiver(fn, value.Args[0], key)
+			return x.iterableReceiverWithTypes(fn, value.Args[0], key, types)
 		}
 		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
 			for _, candidate := range x.functions {
 				if candidate.node.ID == id && candidate.decl.Type.Results != nil && len(candidate.decl.Type.Results.List) > 0 {
-					return x.iterableReceiver(candidate, candidate.decl.Type.Results.List[0].Type, key)
+					return x.iterableReceiverWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, key, types)
 				}
 			}
 		}
+	case *ast.IndexExpr:
+		return x.instantiatedIterableReceiver(fn, value.X, []ast.Expr{value.Index}, key, types)
+	case *ast.IndexListExpr:
+		return x.instantiatedIterableReceiver(fn, value.X, value.Indices, key, types)
 	case *ast.ArrayType:
 		if !key {
-			return x.receiverReference(fn, value.Elt)
+			return x.receiverReferenceWithTypes(fn, value.Elt, types)
 		}
 	case *ast.MapType:
 		if key {
-			return x.receiverReference(fn, value.Key)
+			return x.receiverReferenceWithTypes(fn, value.Key, types)
 		}
-		return x.receiverReference(fn, value.Value)
+		return x.receiverReferenceWithTypes(fn, value.Value, types)
 	case *ast.ChanType:
-		return x.receiverReference(fn, value.Value)
+		return x.receiverReferenceWithTypes(fn, value.Value, types)
 	case *ast.ParenExpr:
-		return x.iterableReceiver(fn, value.X, key)
+		return x.iterableReceiverWithTypes(fn, value.X, key, types)
 	}
 	return "", ""
 }
 
+func (x *indexer) instantiatedIterableReceiver(fn function, base ast.Expr, arguments []ast.Expr, key bool, inherited map[string]typeArgument) (string, string) {
+	typeFn, spec, ok := x.namedTypeSpec(fn, base)
+	if !ok || spec.TypeParams == nil {
+		return "", ""
+	}
+	types := map[string]typeArgument{}
+	for name, argument := range inherited {
+		types[name] = argument
+	}
+	index := 0
+	for _, field := range spec.TypeParams.List {
+		for _, name := range field.Names {
+			if index >= len(arguments) {
+				return "", ""
+			}
+			types[name.Name] = typeArgument{fn: fn, expression: arguments[index]}
+			index++
+		}
+	}
+	return x.iterableReceiverWithTypes(typeFn, spec.Type, key, types)
+}
+
+func (x *indexer) receiverReferenceWithTypes(fn function, expression ast.Expr, types map[string]typeArgument) (string, string) {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if argument, ok := types[value.Name]; ok {
+			return x.receiverReference(argument.fn, argument.expression)
+		}
+	case *ast.StarExpr:
+		return x.receiverReferenceWithTypes(fn, value.X, types)
+	case *ast.ParenExpr:
+		return x.receiverReferenceWithTypes(fn, value.X, types)
+	}
+	return x.receiverReference(fn, expression)
+}
+
 func (x *indexer) namedTypeExpression(fn function, expression ast.Expr) (function, ast.Expr, bool) {
+	typeFn, spec, ok := x.namedTypeSpec(fn, expression)
+	if !ok {
+		return function{}, nil, false
+	}
+	return typeFn, spec.Type, true
+}
+
+func (x *indexer) namedTypeSpec(fn function, expression ast.Expr) (function, *ast.TypeSpec, bool) {
 	packageID, name := fn.packageID, ""
 	switch value := expression.(type) {
 	case *ast.Ident:
@@ -855,11 +962,11 @@ func (x *indexer) namedTypeExpression(fn function, expression ast.Expr) (functio
 	default:
 		return function{}, nil, false
 	}
-	for _, candidate := range x.functions {
-		if candidate.packageID != packageID {
+	for _, source := range x.files {
+		if source.packageID != packageID {
 			continue
 		}
-		for _, declaration := range candidate.file.Decls {
+		for _, declaration := range source.file.Decls {
 			general, ok := declaration.(*ast.GenDecl)
 			if !ok || general.Tok != token.TYPE {
 				continue
@@ -867,7 +974,8 @@ func (x *indexer) namedTypeExpression(fn function, expression ast.Expr) (functio
 			for _, spec := range general.Specs {
 				typeSpec, ok := spec.(*ast.TypeSpec)
 				if ok && typeSpec.Name.Name == name {
-					return candidate, typeSpec.Type, true
+					context := function{packageID: packageID, file: source.file, imports: source.imports}
+					return context, typeSpec, true
 				}
 			}
 		}
@@ -986,6 +1094,9 @@ func (x *indexer) groupPrefix(fn function, expression ast.Expr) string {
 	case *ast.Ident:
 		if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
 			return x.groupPrefix(fn, bound)
+		}
+		if packageFn, bound, ok := x.packageValueExpression(fn.packageID, value.Name); ok {
+			return x.groupPrefix(packageFn, bound)
 		}
 	case *ast.CallExpr:
 		selector, ok := value.Fun.(*ast.SelectorExpr)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/and1truong/aegir/internal/attention"
 	contractdiff "github.com/and1truong/aegir/internal/contracts"
 	"github.com/and1truong/aegir/internal/store"
 )
@@ -89,6 +90,38 @@ func TestRepositoryIndexAndImpactFlow(t *testing.T) {
 	}
 	if impact.Root != publicID || len(impact.Nodes) == 0 {
 		t.Fatalf("unexpected impact response: %#v", impact)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/repositories/"+snapshot.Repository.ID+"/attention?window=90", nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("attention: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var landscape attention.Landscape
+	if err := json.Unmarshal(response.Body.Bytes(), &landscape); err != nil {
+		t.Fatal(err)
+	}
+	if landscape.ModelVersion != attention.ModelVersion || landscape.UnitLevel != "package" || len(landscape.Units) == 0 {
+		t.Fatalf("unexpected attention landscape: %#v", landscape)
+	}
+	if landscape.Units[0].ChangeVelocity.Score != nil {
+		t.Fatal("invalid fake Git repository must produce unavailable velocity, not zero")
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/repositories/"+snapshot.Repository.ID+"/attention/evidence?window=90&unitId="+landscape.Units[0].Unit.ID, nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("attention evidence: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var evidence struct {
+		Unit attention.Unit `json:"unit"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Unit.Unit.ID != landscape.Units[0].Unit.ID {
+		t.Fatalf("unexpected attention evidence unit: %#v", evidence.Unit)
 	}
 
 	headContract := "openapi: 3.1.0\ncomponents:\n  schemas:\n    Order:\n      type: object\n      required: [id]\n      properties:\n        id:\n          type: string\n"

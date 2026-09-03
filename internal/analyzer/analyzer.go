@@ -25,6 +25,8 @@ type Node struct {
 	Service     string         `json:"service,omitempty"`
 	Package     string         `json:"pkg,omitempty"`
 	File        string         `json:"file,omitempty"`
+	Owner       string         `json:"owner,omitempty"`
+	Owners      []string       `json:"owners,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	Meta        map[string]any `json:"meta,omitempty"`
@@ -124,16 +126,17 @@ type Analysis struct {
 }
 
 type Telemetry struct {
-	NodeID    string  `json:"nodeId"`
-	RPM       float64 `json:"rpm,omitempty"`
-	QPS       float64 `json:"qps,omitempty"`
-	P50       float64 `json:"p50,omitempty"`
-	P95       float64 `json:"p95,omitempty"`
-	P99       float64 `json:"p99,omitempty"`
-	ErrorRate float64 `json:"errorRate,omitempty"`
-	Window    string  `json:"window"`
-	Source    string  `json:"source"`
-	Note      string  `json:"note,omitempty"`
+	NodeID          string  `json:"nodeId"`
+	RPM             float64 `json:"rpm,omitempty"`
+	QPS             float64 `json:"qps,omitempty"`
+	TrafficObserved bool    `json:"trafficObserved,omitempty"`
+	P50             float64 `json:"p50,omitempty"`
+	P95             float64 `json:"p95,omitempty"`
+	P99             float64 `json:"p99,omitempty"`
+	ErrorRate       float64 `json:"errorRate,omitempty"`
+	Window          string  `json:"window"`
+	Source          string  `json:"source"`
+	Note            string  `json:"note,omitempty"`
 }
 
 type Complexity struct {
@@ -162,28 +165,45 @@ type Snapshot struct {
 }
 
 type function struct {
-	node      Node
-	pkgDir    string
-	packageID string
-	decl      *ast.FuncDecl
-	file      *ast.File
-	imports   map[string]string
-	isTest    bool
+	node        Node
+	pkgDir      string
+	packageID   string
+	packageName string
+	decl        *ast.FuncDecl
+	file        *ast.File
+	imports     map[string]string
+	isTest      bool
+}
+
+type packageFile struct {
+	packageID   string
+	packageName string
+	file        *ast.File
+	imports     map[string]string
+}
+
+type typeArgument struct {
+	fn         function
+	expression ast.Expr
+	types      map[string]typeArgument
 }
 
 type indexer struct {
-	root        string
-	module      string
-	serviceName string
-	serviceID   string
-	fset        *token.FileSet
-	nodes       map[string]Node
-	edges       map[string]Edge
-	evidence    map[string]EvidenceRecord
-	functions   []function
-	byPackage   map[string]map[string]string
-	packages    map[string]string
-	contracts   []Contract
+	root          string
+	module        string
+	serviceName   string
+	serviceID     string
+	fset          *token.FileSet
+	nodes         map[string]Node
+	edges         map[string]Edge
+	evidence      map[string]EvidenceRecord
+	functions     []function
+	files         []packageFile
+	byPackage     map[string]map[string]string
+	packages      map[string]string
+	packageOwners map[string]map[string]int
+	contracts     []Contract
+	owners        []codeOwnerRule
 }
 
 func stableID(kind, value string) string {
@@ -313,14 +333,16 @@ func newIndexer(root, repositoryName string) *indexer {
 	}
 	return &indexer{
 		root: root, module: readModule(root), serviceName: name, serviceID: stableID("service", name), fset: token.NewFileSet(),
-		nodes: map[string]Node{}, edges: map[string]Edge{}, evidence: map[string]EvidenceRecord{}, byPackage: map[string]map[string]string{}, packages: map[string]string{}, contracts: []Contract{},
+		nodes: map[string]Node{}, edges: map[string]Edge{}, evidence: map[string]EvidenceRecord{}, byPackage: map[string]map[string]string{}, packages: map[string]string{}, packageOwners: map[string]map[string]int{}, contracts: []Contract{}, owners: readCodeOwners(root),
 	}
 }
 
 func (x *indexer) packageFor(dir, packageName string) string {
 	rel, _ := filepath.Rel(x.root, dir)
+	path := rel
 	if rel == "." {
 		rel = packageName
+		path = "."
 	}
 	id, ok := x.packages[dir]
 	if ok {
@@ -328,9 +350,41 @@ func (x *indexer) packageFor(dir, packageName string) string {
 	}
 	id = stableID("package", filepath.ToSlash(rel))
 	x.packages[dir] = id
-	x.nodes[id] = Node{ID: id, Kind: "package", Label: filepath.ToSlash(rel), Service: x.serviceID, File: filepath.ToSlash(rel)}
+	x.nodes[id] = Node{ID: id, Kind: "package", Label: filepath.ToSlash(rel), Service: x.serviceID, File: filepath.ToSlash(path)}
 	x.addEdge(x.serviceID, "owns", id, "contains", filepath.ToSlash(rel))
 	return id
+}
+
+func (x *indexer) recordPackageOwner(packageID, path string) {
+	owners := ownersFor(x.owners, path)
+	if len(owners) == 0 {
+		return
+	}
+	if x.packageOwners[packageID] == nil {
+		x.packageOwners[packageID] = map[string]int{}
+	}
+	for _, owner := range owners {
+		x.packageOwners[packageID][owner]++
+	}
+}
+
+func (x *indexer) finalizePackageOwners() {
+	for packageID, counts := range x.packageOwners {
+		owners := make([]string, 0, len(counts))
+		for owner := range counts {
+			owners = append(owners, owner)
+		}
+		sort.Slice(owners, func(i, j int) bool {
+			if counts[owners[i]] != counts[owners[j]] {
+				return counts[owners[i]] > counts[owners[j]]
+			}
+			return owners[i] < owners[j]
+		})
+		node := x.nodes[packageID]
+		node.Owner = owners[0]
+		node.Owners = owners
+		x.nodes[packageID] = node
+	}
 }
 
 func (x *indexer) localPackageID(importPath string) (string, bool) {
@@ -362,7 +416,7 @@ func ignoredDir(name string) bool {
 func (x *indexer) collect() error {
 	service := Node{ID: x.serviceID, Kind: "service", Label: x.serviceName, File: ".", Description: "Repository root", Meta: map[string]any{"module": x.module}}
 	x.nodes[service.ID] = service
-	return filepath.WalkDir(x.root, func(path string, entry os.DirEntry, walkErr error) error {
+	if err := filepath.WalkDir(x.root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -390,7 +444,8 @@ func (x *indexer) collect() error {
 				if contractErr != nil {
 					return fmt.Errorf("parse contract %s: %w", rel, contractErr)
 				}
-				n := Node{ID: contract.ID, Kind: "contract", Label: entry.Name(), File: rel, Service: x.serviceID, Description: "Discovered contract file", Meta: map[string]any{"type": typ, "fingerprint": contract.Fingerprint}}
+				owners := ownersFor(x.owners, rel)
+				n := Node{ID: contract.ID, Kind: "contract", Label: entry.Name(), File: rel, Service: x.serviceID, Owner: firstOwner(owners), Owners: owners, Description: "Discovered contract file", Meta: map[string]any{"type": typ, "fingerprint": contract.Fingerprint}}
 				x.nodes[contract.ID] = n
 				x.contracts = append(x.contracts, contract)
 			}
@@ -407,10 +462,11 @@ func (x *indexer) collect() error {
 			return fmt.Errorf("parse %s: %w", rel, err)
 		}
 		pkgID := x.packageFor(filepath.Dir(path), parsed.Name.Name)
+		x.recordPackageOwner(pkgID, rel)
 		imports := map[string]string{}
 		for _, spec := range parsed.Imports {
 			importPath, _ := strconv.Unquote(spec.Path.Value)
-			alias := filepath.Base(importPath)
+			alias := defaultImportAlias(importPath)
 			if spec.Name != nil {
 				alias = spec.Name.Name
 			}
@@ -425,6 +481,7 @@ func (x *indexer) collect() error {
 				x.addEdge(pkgID, "depends_on", extID, "imports", x.sourceLocation(spec.Pos()))
 			}
 		}
+		x.files = append(x.files, packageFile{packageID: pkgID, packageName: parsed.Name.Name, file: parsed, imports: imports})
 		if x.byPackage[pkgID] == nil {
 			x.byPackage[pkgID] = map[string]string{}
 		}
@@ -452,15 +509,48 @@ func (x *indexer) collect() error {
 				sum := sha1.Sum(source[startOffset:endOffset])
 				fingerprint = hex.EncodeToString(sum[:])
 			}
-			n := Node{ID: id, Kind: kind, Label: label, Service: x.serviceID, Package: pkgID, File: fmt.Sprintf("%s:%d", rel, pos.Line), Meta: map[string]any{"exported": ast.IsExported(fn.Name.Name), "startLine": pos.Line, "endLine": end.Line, "fingerprint": fingerprint}}
+			owners := ownersFor(x.owners, rel)
+			n := Node{ID: id, Kind: kind, Label: label, Service: x.serviceID, Package: pkgID, File: fmt.Sprintf("%s:%d", rel, pos.Line), Owner: firstOwner(owners), Owners: owners, Meta: map[string]any{"exported": ast.IsExported(fn.Name.Name), "startLine": pos.Line, "endLine": end.Line, "fingerprint": fingerprint}}
 			x.nodes[id] = n
-			x.byPackage[pkgID][fn.Name.Name] = id
-			x.byPackage[pkgID][label] = id
-			x.functions = append(x.functions, function{node: n, pkgDir: filepath.Dir(path), packageID: pkgID, decl: fn, file: parsed, imports: imports, isTest: isTest})
+			if kind != "method" {
+				x.byPackage[pkgID][functionLookupKey(parsed.Name.Name, fn.Name.Name)] = id
+			}
+			x.byPackage[pkgID][functionLookupKey(parsed.Name.Name, label)] = id
+			x.functions = append(x.functions, function{node: n, pkgDir: filepath.Dir(path), packageID: pkgID, packageName: parsed.Name.Name, decl: fn, file: parsed, imports: imports, isTest: isTest})
 			x.addEdge(pkgID, "owns", id, "declares", x.sourceLocation(fn.Pos()))
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	for _, contract := range x.contracts {
+		directory := filepath.Dir(filepath.Join(x.root, filepath.FromSlash(contract.Path)))
+		packageID := x.packageFor(directory, filepath.Base(directory))
+		node := x.nodes[contract.Node]
+		node.Package = packageID
+		x.nodes[contract.Node] = node
+		x.recordPackageOwner(packageID, contract.Path)
+		x.addEdge(packageID, "owns", contract.Node, "contains", contract.Path)
+	}
+	x.finalizePackageOwners()
+	return nil
+}
+
+func defaultImportAlias(importPath string) string {
+	alias := filepath.Base(importPath)
+	if version := strings.TrimPrefix(alias, "v"); version != alias {
+		if _, err := strconv.Atoi(version); err == nil {
+			return filepath.Base(filepath.Dir(importPath))
+		}
+	}
+	return alias
+}
+
+func firstOwner(owners []string) string {
+	if len(owners) == 0 {
+		return ""
+	}
+	return owners[0]
 }
 
 func receiverName(expr ast.Expr) string {
@@ -488,14 +578,22 @@ func literalString(expr ast.Expr) string {
 }
 
 func (x *indexer) resolveCall(fn function, call *ast.CallExpr) (string, string) {
-	switch target := call.Fun.(type) {
+	return x.resolveTarget(fn, call.Fun)
+}
+
+func (x *indexer) resolveTarget(fn function, expression ast.Expr) (string, string) {
+	switch target := expression.(type) {
+	case *ast.IndexExpr:
+		return x.resolveTarget(fn, target.X)
+	case *ast.IndexListExpr:
+		return x.resolveTarget(fn, target.X)
 	case *ast.Ident:
-		return x.byPackage[fn.packageID][target.Name], target.Name
+		return x.functionID(fn.packageID, fn.packageName, target.Name), target.Name
 	case *ast.SelectorExpr:
 		if ident, ok := target.X.(*ast.Ident); ok {
 			if importPath := fn.imports[ident.Name]; importPath != "" {
 				if packageID, local := x.localPackageID(importPath); local {
-					if id := x.byPackage[packageID][target.Sel.Name]; id != "" {
+					if id := x.functionID(packageID, x.primaryPackageName(packageID), target.Sel.Name); id != "" {
 						return id, importPath + "." + target.Sel.Name
 					}
 					return packageID, importPath + "." + target.Sel.Name
@@ -503,12 +601,599 @@ func (x *indexer) resolveCall(fn function, call *ast.CallExpr) (string, string) 
 				return stableID("package", importPath), importPath + "." + target.Sel.Name
 			}
 		}
-		if id := x.byPackage[fn.packageID][target.Sel.Name]; id != "" {
-			return id, target.Sel.Name
+		if packageID, receiverType := x.receiverReference(fn, target.X); packageID != "" && receiverType != "" {
+			packageName := x.receiverPackageName(fn, target.X)
+			if packageName == "" {
+				packageName = x.primaryPackageName(packageID)
+			}
+			if id := x.functionID(packageID, packageName, receiverType+"."+target.Sel.Name); id != "" {
+				return id, target.Sel.Name
+			}
 		}
 		return "", target.Sel.Name
 	}
 	return "", ""
+}
+
+func (x *indexer) receiverPackageName(fn function, expression ast.Expr) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if importPath := fn.imports[value.Name]; importPath != "" {
+			if packageID, local := x.localPackageID(importPath); local {
+				return x.primaryPackageName(packageID)
+			}
+			return ""
+		}
+		if value.Pos() != token.NoPos {
+			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+				return x.receiverPackageName(fn, bound)
+			}
+		}
+		if packageFn, bound, ok := x.packageValueExpression(fn, value.Name); ok {
+			return x.receiverPackageName(packageFn, bound)
+		}
+		if x.hasReceiverType(fn, value.Name) {
+			return fn.packageName
+		}
+	case *ast.SelectorExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.StarExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.ParenExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.IndexExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.IndexListExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.UnaryExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.ChanType:
+		return x.receiverPackageName(fn, value.Value)
+	case *ast.CompositeLit:
+		return x.receiverPackageName(fn, value.Type)
+	case *ast.CallExpr:
+		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
+			for _, candidate := range x.functions {
+				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
+					continue
+				}
+				return x.receiverPackageNameWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value, nil))
+			}
+		}
+	}
+	return ""
+}
+
+func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, string) {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if importPath := fn.imports[value.Name]; importPath != "" {
+			if packageID, local := x.localPackageID(importPath); local {
+				return packageID, ""
+			}
+			return stableID("package", importPath), ""
+		}
+		if value.Pos() != token.NoPos {
+			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+				return x.receiverReference(fn, bound)
+			}
+		}
+		if packageFn, bound, ok := x.packageValueExpression(fn, value.Name); ok {
+			return x.receiverReference(packageFn, bound)
+		}
+		if x.hasReceiverType(fn, value.Name) {
+			return fn.packageID, value.Name
+		}
+		return "", ""
+	case *ast.SelectorExpr:
+		packageID, receiverType := x.receiverReference(fn, value.X)
+		if packageID != "" && receiverType == "" {
+			return packageID, value.Sel.Name
+		}
+		return "", ""
+	case *ast.StarExpr:
+		return x.receiverReference(fn, value.X)
+	case *ast.ParenExpr:
+		return x.receiverReference(fn, value.X)
+	case *ast.IndexExpr:
+		return x.receiverReference(fn, value.X)
+	case *ast.IndexListExpr:
+		return x.receiverReference(fn, value.X)
+	case *ast.UnaryExpr:
+		return x.receiverReference(fn, value.X)
+	case *ast.ChanType:
+		return x.receiverReference(fn, value.Value)
+	case *ast.CompositeLit:
+		return x.receiverReference(fn, value.Type)
+	case *ast.CallExpr:
+		if packageID := x.echoConstructorPackage(fn, value.Fun); packageID != "" {
+			return packageID, "Echo"
+		}
+		if selector, ok := value.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Group" {
+			packageID, receiverType := x.receiverReference(fn, selector.X)
+			if routeReceiverName(receiverType) || receiverType == "" && routeReceiverName(expressionName(selector.X)) {
+				return packageID, "Group"
+			}
+		}
+		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
+			for _, candidate := range x.functions {
+				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
+					continue
+				}
+				return x.receiverReferenceWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value, nil))
+			}
+		}
+	}
+	return "", ""
+}
+
+func callTypeArguments(caller, callee function, call *ast.CallExpr, inherited map[string]typeArgument) map[string]typeArgument {
+	var arguments []ast.Expr
+	switch value := call.Fun.(type) {
+	case *ast.IndexExpr:
+		arguments = []ast.Expr{value.Index}
+	case *ast.IndexListExpr:
+		arguments = value.Indices
+	}
+	if callee.decl.Type.TypeParams == nil {
+		return inherited
+	}
+	types := map[string]typeArgument{}
+	typeParameters := map[string]bool{}
+	parameterNames := []string{}
+	for _, field := range callee.decl.Type.TypeParams.List {
+		for _, name := range field.Names {
+			typeParameters[name.Name] = true
+			parameterNames = append(parameterNames, name.Name)
+		}
+	}
+	for index, argument := range arguments {
+		if index >= len(parameterNames) {
+			break
+		}
+		types[parameterNames[index]] = typeArgument{fn: caller, expression: argument, types: inherited}
+	}
+	argumentIndex := 0
+	if callee.decl.Type.Params != nil {
+		for _, field := range callee.decl.Type.Params.List {
+			count := len(field.Names)
+			if count == 0 {
+				count = 1
+			}
+			for index := 0; index < count && argumentIndex < len(call.Args); index++ {
+				if parameter, ok := field.Type.(*ast.Ident); ok && typeParameters[parameter.Name] {
+					if _, exists := types[parameter.Name]; !exists {
+						types[parameter.Name] = typeArgument{fn: caller, expression: call.Args[argumentIndex], types: inherited}
+					}
+				}
+				argumentIndex++
+			}
+		}
+	}
+	return types
+}
+
+func (x *indexer) receiverPackageNameWithTypes(fn function, expression ast.Expr, types map[string]typeArgument) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if argument, ok := types[value.Name]; ok {
+			return x.receiverPackageNameWithTypes(argument.fn, argument.expression, argument.types)
+		}
+	case *ast.StarExpr:
+		return x.receiverPackageNameWithTypes(fn, value.X, types)
+	case *ast.ParenExpr:
+		return x.receiverPackageNameWithTypes(fn, value.X, types)
+	}
+	return x.receiverPackageName(fn, expression)
+}
+
+func functionLookupKey(packageName, name string) string {
+	return packageName + "\x00" + name
+}
+
+func (x *indexer) functionID(packageID, packageName, name string) string {
+	return x.byPackage[packageID][functionLookupKey(packageName, name)]
+}
+
+func (x *indexer) hasReceiverType(fn function, name string) bool {
+	prefix := functionLookupKey(fn.packageName, name+".")
+	for key := range x.byPackage[fn.packageID] {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (x *indexer) echoConstructorPackage(fn function, expression ast.Expr) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if value.Pos() != token.NoPos {
+			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+				return x.echoConstructorPackage(fn, bound)
+			}
+		}
+		if packageFn, bound, ok := x.packageValueExpression(fn, value.Name); ok {
+			return x.echoConstructorPackage(packageFn, bound)
+		}
+	case *ast.SelectorExpr:
+		if value.Sel.Name == "New" {
+			packageID, receiverType := x.receiverReference(fn, value.X)
+			if receiverType == "" && strings.Contains(x.nodes[packageID].Label, "labstack/echo") {
+				return packageID
+			}
+		}
+	case *ast.ParenExpr:
+		return x.echoConstructorPackage(fn, value.X)
+	}
+	return ""
+}
+
+func boundExpression(x *indexer, fn function, name string, before token.Pos) ast.Expr {
+	if fn.decl == nil {
+		return nil
+	}
+	var fallback ast.Expr
+	for _, fields := range []*ast.FieldList{fn.decl.Recv, fn.decl.Type.Params} {
+		if fields == nil {
+			continue
+		}
+		for _, field := range fields.List {
+			for _, candidate := range field.Names {
+				if candidate.Name == name {
+					fallback = field.Type
+				}
+			}
+		}
+	}
+	if result := bindingInBlock(x, fn, fn.decl.Body, name, before); result != nil {
+		return result
+	}
+	return fallback
+}
+
+func (x *indexer) packageValueExpression(fn function, name string) (function, ast.Expr, bool) {
+	for _, source := range x.files {
+		if source.packageID != fn.packageID || source.packageName != fn.packageName {
+			continue
+		}
+		for _, declaration := range source.file.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || general.Tok != token.VAR && general.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range general.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for index, candidate := range value.Names {
+					if candidate.Name != name {
+						continue
+					}
+					context := function{packageID: fn.packageID, packageName: source.packageName, file: source.file, imports: source.imports}
+					if index < len(value.Values) {
+						return context, value.Values[index], true
+					}
+					if value.Type != nil {
+						return context, value.Type, true
+					}
+				}
+			}
+		}
+	}
+	return function{}, nil, false
+}
+
+func bindingInBlock(x *indexer, fn function, block *ast.BlockStmt, name string, before token.Pos) ast.Expr {
+	if block == nil {
+		return nil
+	}
+	return bindingInStatements(x, fn, block.List, name, before)
+}
+
+func bindingInStatements(x *indexer, fn function, statements []ast.Stmt, name string, before token.Pos) ast.Expr {
+	var result ast.Expr
+	for _, statement := range statements {
+		if statement.Pos() >= before {
+			break
+		}
+		if statement.End() < before {
+			if binding := bindingFromStatement(statement, name); binding != nil {
+				result = binding
+			}
+			continue
+		}
+		if binding := bindingFromScopedHeader(x, fn, statement, name); binding != nil {
+			result = binding
+		}
+		if nested := containingStatements(statement, before); nested != nil {
+			if binding := bindingInStatements(x, fn, nested, name, before); binding != nil {
+				return binding
+			}
+		}
+		break
+	}
+	return result
+}
+
+func bindingFromStatement(statement ast.Stmt, name string) ast.Expr {
+	switch declaration := statement.(type) {
+	case *ast.DeclStmt:
+		general, ok := declaration.Decl.(*ast.GenDecl)
+		if !ok {
+			return nil
+		}
+		for _, spec := range general.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for index, candidate := range value.Names {
+				if candidate.Name != name {
+					continue
+				}
+				if value.Type != nil {
+					return value.Type
+				}
+				if index < len(value.Values) {
+					return value.Values[index]
+				}
+			}
+		}
+	case *ast.AssignStmt:
+		for index, left := range declaration.Lhs {
+			candidate, ok := left.(*ast.Ident)
+			if ok && candidate.Name == name && index < len(declaration.Rhs) {
+				return declaration.Rhs[index]
+			}
+		}
+	}
+	return nil
+}
+
+func bindingFromScopedHeader(x *indexer, fn function, statement ast.Stmt, name string) ast.Expr {
+	var initializer ast.Stmt
+	switch value := statement.(type) {
+	case *ast.IfStmt:
+		initializer = value.Init
+	case *ast.ForStmt:
+		initializer = value.Init
+	case *ast.SwitchStmt:
+		initializer = value.Init
+	case *ast.TypeSwitchStmt:
+		if binding := bindingFromStatement(value.Assign, name); binding != nil {
+			return binding
+		}
+		initializer = value.Init
+	case *ast.CommClause:
+		return bindingFromStatement(value.Comm, name)
+	case *ast.RangeStmt:
+		return x.rangeBinding(fn, value, name)
+	}
+	return bindingFromStatement(initializer, name)
+}
+
+func (x *indexer) rangeBinding(fn function, statement *ast.RangeStmt, name string) ast.Expr {
+	key, keyMatches := statement.Key.(*ast.Ident)
+	value, valueMatches := statement.Value.(*ast.Ident)
+	keyMatches = keyMatches && key.Name == name
+	valueMatches = valueMatches && value.Name == name
+	if !valueMatches && !keyMatches {
+		return nil
+	}
+	packageID, receiverType := x.iterableReceiver(fn, statement.X, keyMatches && !valueMatches)
+	if packageID == "" || receiverType == "" {
+		return nil
+	}
+	if packageID == fn.packageID {
+		return ast.NewIdent(receiverType)
+	}
+	for alias, importPath := range fn.imports {
+		if localID, local := x.localPackageID(importPath); local && localID == packageID {
+			return &ast.SelectorExpr{X: ast.NewIdent(alias), Sel: ast.NewIdent(receiverType)}
+		}
+	}
+	return nil
+}
+
+func (x *indexer) iterableReceiver(fn function, expression ast.Expr, key bool) (string, string) {
+	return x.iterableReceiverWithTypes(fn, expression, key, nil)
+}
+
+func (x *indexer) iterableReceiverWithTypes(fn function, expression ast.Expr, key bool, types map[string]typeArgument) (string, string) {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if argument, ok := types[value.Name]; ok {
+			return x.iterableReceiverWithTypes(argument.fn, argument.expression, key, argument.types)
+		}
+		if value.Pos() != token.NoPos {
+			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+				return x.iterableReceiverWithTypes(fn, bound, key, types)
+			}
+		}
+		if typeFn, underlying, ok := x.namedTypeExpression(fn, value); ok {
+			return x.iterableReceiverWithTypes(typeFn, underlying, key, types)
+		}
+	case *ast.SelectorExpr:
+		if typeFn, underlying, ok := x.namedTypeExpression(fn, value); ok {
+			return x.iterableReceiverWithTypes(typeFn, underlying, key, types)
+		}
+	case *ast.CompositeLit:
+		return x.iterableReceiverWithTypes(fn, value.Type, key, types)
+	case *ast.CallExpr:
+		if identifier, ok := value.Fun.(*ast.Ident); ok && identifier.Name == "make" && len(value.Args) > 0 {
+			return x.iterableReceiverWithTypes(fn, value.Args[0], key, types)
+		}
+		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
+			for _, candidate := range x.functions {
+				if candidate.node.ID == id && candidate.decl.Type.Results != nil && len(candidate.decl.Type.Results.List) > 0 {
+					return x.iterableReceiverWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, key, callTypeArguments(fn, candidate, value, types))
+				}
+			}
+		}
+	case *ast.IndexExpr:
+		return x.instantiatedIterableReceiver(fn, value.X, []ast.Expr{value.Index}, key, types)
+	case *ast.IndexListExpr:
+		return x.instantiatedIterableReceiver(fn, value.X, value.Indices, key, types)
+	case *ast.ArrayType:
+		if !key {
+			return x.receiverReferenceWithTypes(fn, value.Elt, types)
+		}
+	case *ast.MapType:
+		if key {
+			return x.receiverReferenceWithTypes(fn, value.Key, types)
+		}
+		return x.receiverReferenceWithTypes(fn, value.Value, types)
+	case *ast.ChanType:
+		return x.receiverReferenceWithTypes(fn, value.Value, types)
+	case *ast.FuncType:
+		if value.Params == nil || len(value.Params.List) == 0 {
+			return "", ""
+		}
+		yield, ok := value.Params.List[0].Type.(*ast.FuncType)
+		if !ok || yield.Params == nil {
+			return "", ""
+		}
+		yielded := []ast.Expr{}
+		for _, field := range yield.Params.List {
+			count := len(field.Names)
+			if count == 0 {
+				count = 1
+			}
+			for index := 0; index < count; index++ {
+				yielded = append(yielded, field.Type)
+			}
+		}
+		if len(yielded) == 0 {
+			return "", ""
+		}
+		index := 0
+		if !key && len(yielded) > 1 {
+			index = 1
+		}
+		return x.receiverReferenceWithTypes(fn, yielded[index], types)
+	case *ast.ParenExpr:
+		return x.iterableReceiverWithTypes(fn, value.X, key, types)
+	}
+	return "", ""
+}
+
+func (x *indexer) instantiatedIterableReceiver(fn function, base ast.Expr, arguments []ast.Expr, key bool, inherited map[string]typeArgument) (string, string) {
+	typeFn, spec, ok := x.namedTypeSpec(fn, base)
+	if !ok || spec.TypeParams == nil {
+		return "", ""
+	}
+	types := map[string]typeArgument{}
+	for name, argument := range inherited {
+		types[name] = argument
+	}
+	index := 0
+	for _, field := range spec.TypeParams.List {
+		for _, name := range field.Names {
+			if index >= len(arguments) {
+				return "", ""
+			}
+			types[name.Name] = typeArgument{fn: fn, expression: arguments[index], types: inherited}
+			index++
+		}
+	}
+	return x.iterableReceiverWithTypes(typeFn, spec.Type, key, types)
+}
+
+func (x *indexer) receiverReferenceWithTypes(fn function, expression ast.Expr, types map[string]typeArgument) (string, string) {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if argument, ok := types[value.Name]; ok {
+			return x.receiverReferenceWithTypes(argument.fn, argument.expression, argument.types)
+		}
+	case *ast.StarExpr:
+		return x.receiverReferenceWithTypes(fn, value.X, types)
+	case *ast.ParenExpr:
+		return x.receiverReferenceWithTypes(fn, value.X, types)
+	}
+	return x.receiverReference(fn, expression)
+}
+
+func (x *indexer) namedTypeExpression(fn function, expression ast.Expr) (function, ast.Expr, bool) {
+	typeFn, spec, ok := x.namedTypeSpec(fn, expression)
+	if !ok {
+		return function{}, nil, false
+	}
+	return typeFn, spec.Type, true
+}
+
+func (x *indexer) namedTypeSpec(fn function, expression ast.Expr) (function, *ast.TypeSpec, bool) {
+	packageID, packageName, name := fn.packageID, fn.packageName, ""
+	switch value := expression.(type) {
+	case *ast.Ident:
+		name = value.Name
+	case *ast.SelectorExpr:
+		identifier, ok := value.X.(*ast.Ident)
+		if !ok {
+			return function{}, nil, false
+		}
+		importPath := fn.imports[identifier.Name]
+		var local bool
+		packageID, local = x.localPackageID(importPath)
+		if !local {
+			return function{}, nil, false
+		}
+		packageName = x.primaryPackageName(packageID)
+		name = value.Sel.Name
+	default:
+		return function{}, nil, false
+	}
+	for _, source := range x.files {
+		if source.packageID != packageID || source.packageName != packageName {
+			continue
+		}
+		for _, declaration := range source.file.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || general.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range general.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if ok && typeSpec.Name.Name == name {
+					context := function{packageID: packageID, packageName: source.packageName, file: source.file, imports: source.imports}
+					return context, typeSpec, true
+				}
+			}
+		}
+	}
+	return function{}, nil, false
+}
+
+func (x *indexer) primaryPackageName(packageID string) string {
+	for _, source := range x.files {
+		if source.packageID == packageID && !strings.HasSuffix(source.packageName, "_test") {
+			return source.packageName
+		}
+	}
+	return ""
+}
+
+func containingStatements(node ast.Node, position token.Pos) []ast.Stmt {
+	var result []ast.Stmt
+	ast.Inspect(node, func(candidate ast.Node) bool {
+		if candidate == nil || candidate.Pos() > position || candidate.End() < position {
+			return false
+		}
+		switch scope := candidate.(type) {
+		case *ast.BlockStmt:
+			result = scope.List
+			return false
+		case *ast.CaseClause:
+			result = scope.Body
+			return false
+		case *ast.CommClause:
+			result = scope.Body
+			return false
+		}
+		return true
+	})
+	return result
 }
 
 func (x *indexer) connect() {
@@ -531,7 +1216,33 @@ func (x *indexer) connect() {
 			}
 			x.connectDataflow(fn, call)
 			name := strings.ToUpper(callName)
-			if strings.Contains(name, "HANDLEFUNC") || strings.HasSuffix(name, ".GET") || strings.HasSuffix(name, ".POST") || strings.HasSuffix(name, ".PUT") || strings.HasSuffix(name, ".DELETE") {
+			handlerID := ""
+			handlerEvidence := false
+			start, stop, step := len(call.Args)-1, -1, -1
+			if x.isEchoRegistration(fn, call) {
+				for index, argument := range call.Args {
+					if strings.HasPrefix(literalString(argument), "/") && index+1 < len(call.Args) {
+						start, stop, step = index+1, index+2, 1
+						handlerEvidence = true
+						break
+					}
+				}
+			}
+			for index := start; index != stop; index += step {
+				if _, ok := call.Args[index].(*ast.FuncLit); ok {
+					handlerEvidence = true
+					break
+				}
+				candidate, _ := x.resolveTarget(fn, call.Args[index])
+				if kind := x.nodes[candidate].Kind; kind == "function" || kind == "method" {
+					handlerID = candidate
+					handlerEvidence = true
+					break
+				}
+			}
+			handleRegistration := strings.Contains(name, "HANDLEFUNC")
+			verbRegistration := x.isVerbRegistration(fn, call)
+			if handleRegistration || verbRegistration && handlerEvidence {
 				path := ""
 				for _, arg := range call.Args {
 					if value := literalString(arg); strings.HasPrefix(value, "/") {
@@ -540,6 +1251,7 @@ func (x *indexer) connect() {
 					}
 				}
 				if path != "" {
+					path = joinRoutePath(x.routePrefix(fn, call), path)
 					method := "HTTP"
 					for _, candidate := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
 						if strings.Contains(name, candidate) {
@@ -549,12 +1261,98 @@ func (x *indexer) connect() {
 					}
 					id := stableID("endpoint", method+" "+path)
 					x.nodes[id] = Node{ID: id, Kind: "endpoint", Label: method + " " + path, Service: x.serviceID, File: fn.node.File}
-					x.addEdge(id, "calls", fn.node.ID, "handler", x.sourceLocation(call.Pos()))
+					if handlerID == "" {
+						handlerID = fn.node.ID
+					}
+					x.addEdge(id, "calls", handlerID, "handler", x.sourceLocation(call.Pos()))
 				}
 			}
 			return true
 		})
 	}
+}
+
+func (x *indexer) routePrefix(fn function, call *ast.CallExpr) string {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	return x.groupPrefix(fn, selector.X)
+}
+
+func (x *indexer) groupPrefix(fn function, expression ast.Expr) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+			return x.groupPrefix(fn, bound)
+		}
+		if packageFn, bound, ok := x.packageValueExpression(fn, value.Name); ok {
+			return x.groupPrefix(packageFn, bound)
+		}
+	case *ast.CallExpr:
+		selector, ok := value.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "Group" {
+			return ""
+		}
+		prefix := x.groupPrefix(fn, selector.X)
+		for _, argument := range value.Args {
+			if segment := literalString(argument); strings.HasPrefix(segment, "/") {
+				return joinRoutePath(prefix, segment)
+			}
+		}
+	case *ast.ParenExpr:
+		return x.groupPrefix(fn, value.X)
+	}
+	return ""
+}
+
+func joinRoutePath(prefix, route string) string {
+	if prefix == "" {
+		return route
+	}
+	return "/" + strings.Trim(prefix, "/") + "/" + strings.TrimPrefix(route, "/")
+}
+
+func (x *indexer) isEchoRegistration(fn function, call *ast.CallExpr) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	packageID, receiverType := x.receiverReference(fn, selector.X)
+	if receiverType != "Echo" && receiverType != "Group" {
+		return false
+	}
+	return strings.Contains(x.nodes[packageID].Label, "labstack/echo")
+}
+
+func (x *indexer) isVerbRegistration(fn function, call *ast.CallExpr) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	method := selector.Sel.Name
+	switch strings.ToUpper(method) {
+	case "GET", "POST", "PUT", "PATCH", "DELETE":
+	default:
+		return false
+	}
+	_, receiverType := x.receiverReference(fn, selector.X)
+	if receiverType != "" {
+		return routeReceiverName(receiverType)
+	}
+	return routeReceiverName(expressionName(selector.X))
+}
+
+func routeReceiverName(name string) bool {
+	name = strings.ToLower(name)
+	if index := strings.LastIndex(name, "."); index >= 0 {
+		name = name[index+1:]
+	}
+	switch name {
+	case "r", "e", "router", "routes", "route", "mux", "engine", "group", "echo", "app", "api", "server":
+		return true
+	}
+	return strings.Contains(name, "router") || strings.Contains(name, "route") || strings.Contains(name, "mux")
 }
 
 var sqlTablePattern = regexp.MustCompile(`(?i)\b(FROM|JOIN|INTO|UPDATE)\s+([a-zA-Z_][a-zA-Z0-9_.]*)`)

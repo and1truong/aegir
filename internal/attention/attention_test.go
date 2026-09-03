@@ -1,0 +1,233 @@
+package attention
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/and1truong/aegir/internal/analyzer"
+	"github.com/and1truong/aegir/internal/history"
+)
+
+func TestCalculateRanksPackageWithImpactComplexityAndVelocity(t *testing.T) {
+	now := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	pkgA := analyzer.Node{ID: "pkg:a", Kind: "package", Label: "a", File: "a"}
+	pkgB := analyzer.Node{ID: "pkg:b", Kind: "package", Label: "b", File: "b"}
+	pkgC := analyzer.Node{ID: "pkg:c", Kind: "package", Label: "c", File: "c"}
+	fnA := analyzer.Node{ID: "fn:a", Kind: "function", Label: "A", Package: pkgA.ID, File: "a/a.go:1"}
+	fnB := analyzer.Node{ID: "fn:b", Kind: "function", Label: "B", Package: pkgB.ID, File: "b/b.go:1"}
+	fnC := analyzer.Node{ID: "fn:c", Kind: "function", Label: "C", Package: pkgC.ID, File: "c/c.go:1"}
+	table := analyzer.Node{ID: "table", Kind: "table", Label: "orders"}
+	edges := []analyzer.Edge{
+		{ID: "b-a", Source: fnB.ID, Target: fnA.ID, Kind: "calls", EvidenceRefs: []string{"e1"}},
+		{ID: "c-b", Source: fnC.ID, Target: fnB.ID, Kind: "calls", EvidenceRefs: []string{"e2"}},
+		{ID: "a-table", Source: fnA.ID, Target: table.ID, Kind: "writes", Boundary: "persistence", EvidenceRefs: []string{"e3"}},
+	}
+	snapshot := analyzer.Snapshot{Nodes: []analyzer.Node{pkgA, pkgB, pkgC, fnA, fnB, fnC, table}, Edges: edges, Analysis: analyzer.Analysis{Complexity: []analyzer.Complexity{{NodeID: fnA.ID, Score: 9}, {NodeID: fnB.ID, Score: 2}, {NodeID: fnC.ID, Score: 1}}}}
+	changes := history.Result{Events: []history.ChangeEvent{{ID: "git:new", OccurredAt: now.Add(-24 * time.Hour), AuthorKey: "author", Files: []history.FileChange{{Path: "a/a.go", Additions: 80, Deletions: 20}, {Path: "a/schema/order.sql", Additions: 5}}}}}
+	landscape := Calculate("repo", 1, snapshot, &changes, 90, now)
+	if len(landscape.Units) != 3 {
+		t.Fatalf("expected three package units, got %#v", landscape.Units)
+	}
+	var a Unit
+	for _, unit := range landscape.Units {
+		if unit.Unit.ID == pkgA.ID {
+			a = unit
+		}
+	}
+	if value(a.Impact.Score) <= 0 || value(a.ChangeComplexity.Score) <= 0 || value(a.ChangeVelocity.Score) <= 0 {
+		t.Fatalf("expected explainable scores: %#v", a)
+	}
+	if a.Impact.Coverage < .699 || a.Impact.Coverage > .701 || a.ChangeVelocity.Coverage != 1 {
+		t.Fatalf("unexpected signal coverage: %#v", a)
+	}
+	if len(a.Impact.Factors[0].EvidenceRefs) == 0 || len(a.ChangeVelocity.Factors[0].EvidenceRefs) == 0 {
+		t.Fatalf("expected graph and Git evidence: %#v", a)
+	}
+	if topology := a.ChangeVelocity.Factors[len(a.ChangeVelocity.Factors)-1]; topology.RawValue == 0 || len(topology.EvidenceRefs) == 0 {
+		t.Fatalf("expected contract/schema change evidence: %#v", topology)
+	}
+	if len(landscape.Findings) == 0 || landscape.Findings[0].Region != "protect" || !strings.Contains(landscape.Findings[0].Title, "high-impact") {
+		t.Fatalf("expected an action-oriented protect finding: %#v", landscape.Findings)
+	}
+}
+
+func TestCalculateDoesNotPromoteLowAttentionPackageForVelocityAlone(t *testing.T) {
+	now := time.Now()
+	snapshot := analyzer.Snapshot{Nodes: []analyzer.Node{{ID: "pkg:a", Kind: "package", Label: "a"}, {ID: "fn:a", Kind: "function", Package: "pkg:a", File: "a/a.go:1"}}}
+	changes := history.Result{Events: []history.ChangeEvent{{ID: "git:new", OccurredAt: now, AuthorKey: "author", Files: []history.FileChange{{Path: "a/a.go", Additions: 1000}}}}}
+	landscape := Calculate("repo", 1, snapshot, &changes, 90, now)
+	if landscape.Units[0].Region != "low-attention" || len(landscape.Findings) != 0 {
+		t.Fatalf("velocity-only noise became a finding: %#v", landscape)
+	}
+}
+
+func TestCalculateUsesAvailableRuntimeSignalAndP90Complexity(t *testing.T) {
+	pkg := analyzer.Node{ID: "pkg:a", Kind: "package", Label: "a"}
+	nodes := []analyzer.Node{pkg}
+	complexity := []analyzer.Complexity{}
+	for index := 1; index <= 10; index++ {
+		node := analyzer.Node{ID: fmt.Sprintf("fn:%d", index), Kind: "function", Package: pkg.ID, File: fmt.Sprintf("a/%d.go:1", index)}
+		nodes = append(nodes, node)
+		complexity = append(complexity, analyzer.Complexity{NodeID: node.ID, Score: index})
+	}
+	snapshot := analyzer.Snapshot{Nodes: nodes, Analysis: analyzer.Analysis{Complexity: complexity, Telemetry: []analyzer.Telemetry{{NodeID: "fn:1", RPM: 120}}}}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	unit := landscape.Units[0]
+	if unit.Impact.Coverage < .799 || unit.Impact.Coverage > .801 {
+		t.Fatalf("runtime signal was not included: %#v", unit.Impact)
+	}
+	if got := unit.ChangeComplexity.Factors[len(unit.ChangeComplexity.Factors)-1].RawValue; got != 9 {
+		t.Fatalf("p90 complexity=%v want 9", got)
+	}
+}
+
+func TestCalculateLeavesRuntimeUnavailableWithoutPackageTrafficTelemetry(t *testing.T) {
+	pkgA := analyzer.Node{ID: "pkg:a", Kind: "package", Label: "a"}
+	pkgB := analyzer.Node{ID: "pkg:b", Kind: "package", Label: "b"}
+	fnA := analyzer.Node{ID: "fn:a", Kind: "function", Package: pkgA.ID}
+	fnB := analyzer.Node{ID: "fn:b", Kind: "function", Package: pkgB.ID}
+	snapshot := analyzer.Snapshot{
+		Nodes:    []analyzer.Node{pkgA, pkgB, fnA, fnB},
+		Analysis: analyzer.Analysis{Telemetry: []analyzer.Telemetry{{NodeID: fnA.ID, RPM: 120}, {NodeID: fnB.ID, P99: 200}}},
+	}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	units := map[string]Unit{}
+	for _, unit := range landscape.Units {
+		units[unit.Unit.ID] = unit
+	}
+	if factor := factorByID(units[pkgA.ID].Impact, "runtime-traffic"); factor.Status != "observed" || factor.RawValue != 120 {
+		t.Fatalf("instrumented package runtime signal missing: %#v", factor)
+	}
+	if factor := factorByID(units[pkgB.ID].Impact, "runtime-traffic"); factor.Status != "unavailable" {
+		t.Fatalf("uninstrumented package runtime became observed zero: %#v", factor)
+	}
+}
+
+func TestCalculateResolvesEndpointTelemetryToHandlerPackage(t *testing.T) {
+	pkg := analyzer.Node{ID: "pkg:handler", Kind: "package", Label: "handler"}
+	handler := analyzer.Node{ID: "fn:handler", Kind: "function", Package: pkg.ID}
+	endpoint := analyzer.Node{ID: "endpoint:orders", Kind: "endpoint", Label: "POST /orders"}
+	snapshot := analyzer.Snapshot{
+		Nodes:    []analyzer.Node{pkg, handler, endpoint},
+		Edges:    []analyzer.Edge{{ID: "endpoint-handler", Source: endpoint.ID, Target: handler.ID, Kind: "calls", Label: "handler"}},
+		Analysis: analyzer.Analysis{Telemetry: []analyzer.Telemetry{{NodeID: endpoint.ID, RPM: 120, TrafficObserved: true}}},
+	}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	factor := factorByID(landscape.Units[0].Impact, "runtime-traffic")
+	if factor.Status != "observed" || factor.RawValue != 120 {
+		t.Fatalf("endpoint traffic was not attributed to handler package: %#v", factor)
+	}
+}
+
+func TestCalculateDistinguishesUnavailableVelocityFromZero(t *testing.T) {
+	snapshot := analyzer.Snapshot{Nodes: []analyzer.Node{{ID: "pkg:a", Kind: "package", Label: "a"}}}
+	landscape := Calculate("repo", 1, snapshot, nil, 90, time.Now())
+	if landscape.Units[0].ChangeVelocity.Score != nil || landscape.Completeness.HistoryAvailable {
+		t.Fatalf("unavailable velocity became zero: %#v", landscape)
+	}
+	zeroHistory := history.Result{Events: []history.ChangeEvent{}}
+	landscape = Calculate("repo", 1, snapshot, &zeroHistory, 90, time.Now())
+	if landscape.Units[0].ChangeVelocity.Score == nil || *landscape.Units[0].ChangeVelocity.Score != 0 {
+		t.Fatalf("observed zero history was not retained: %#v", landscape.Units[0].ChangeVelocity)
+	}
+}
+
+func TestCalculateMarksEveryPackageInDependencyCycle(t *testing.T) {
+	packages := []analyzer.Node{{ID: "pkg:a", Kind: "package", Label: "a"}, {ID: "pkg:b", Kind: "package", Label: "b"}}
+	functions := []analyzer.Node{{ID: "fn:a", Kind: "function", Package: "pkg:a"}, {ID: "fn:b", Kind: "function", Package: "pkg:b"}}
+	snapshot := analyzer.Snapshot{Nodes: append(packages, functions...), Edges: []analyzer.Edge{{ID: "a-b", Source: "fn:a", Target: "fn:b", Kind: "calls"}, {ID: "b-a", Source: "fn:b", Target: "fn:a", Kind: "calls"}}}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	for _, unit := range landscape.Units {
+		cycle := factorByID(unit.ChangeComplexity, "cycle-participation")
+		if cycle.RawValue != 1 {
+			t.Fatalf("package %s was not marked cyclic: %#v", unit.Unit.ID, cycle)
+		}
+	}
+}
+
+func TestCalculateMapsContractsAndHistoryToPackagesWithoutFunctions(t *testing.T) {
+	now := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	root := analyzer.Node{ID: "pkg:root", Kind: "package", Label: "repo", File: "."}
+	model := analyzer.Node{ID: "pkg:model", Kind: "package", Label: "internal/model", File: "internal/model"}
+	contract := analyzer.Node{ID: "contract:api", Kind: "contract", Package: model.ID, File: "internal/model/openapi.yaml"}
+	snapshot := analyzer.Snapshot{
+		Nodes:    []analyzer.Node{root, model, contract},
+		Analysis: analyzer.Analysis{Contracts: []analyzer.Contract{{ID: "api", Node: contract.ID}}},
+	}
+	changes := history.Result{Events: []history.ChangeEvent{{
+		ID: "git:new", OccurredAt: now, AuthorKey: "author",
+		Files: []history.FileChange{{Path: "internal/model/types.go", Additions: 12}, {Path: "schema.sql", Additions: 4}, {Path: "web/src/App.tsx", Additions: 1000}},
+	}}}
+	landscape := Calculate("repo", 1, snapshot, &changes, 90, now)
+	units := map[string]Unit{}
+	for _, unit := range landscape.Units {
+		units[unit.Unit.ID] = unit
+	}
+	if owned := factorByID(units[model.ID].Impact, "owned-contracts"); owned.RawValue != 1 {
+		t.Fatalf("contract was not attributed to its package: %#v", owned)
+	}
+	for _, packageID := range []string{root.ID, model.ID} {
+		churn := factorByID(units[packageID].ChangeVelocity, "meaningful-churn")
+		if churn.RawValue == 0 {
+			t.Fatalf("history was not attributed to package %s: %#v", packageID, units[packageID])
+		}
+	}
+	if churn := factorByID(units[root.ID].ChangeVelocity, "meaningful-churn"); churn.RawValue != 4 {
+		t.Fatalf("nested unmatched file leaked into root package: %#v", churn)
+	}
+}
+
+func TestCalculateUsesCodeOwnershipForCrossTeamFactors(t *testing.T) {
+	pkgA := analyzer.Node{ID: "pkg:a", Kind: "package", Label: "a", Owner: "@one", Owners: []string{"@one", "@shared"}}
+	pkgB := analyzer.Node{ID: "pkg:b", Kind: "package", Label: "b", Owner: "@two", Owners: []string{"@two", "@shared"}}
+	pkgC := analyzer.Node{ID: "pkg:c", Kind: "package", Label: "c", Owner: "@three", Owners: []string{"@three"}}
+	fnA := analyzer.Node{ID: "fn:a", Kind: "function", Package: pkgA.ID}
+	fnB := analyzer.Node{ID: "fn:b", Kind: "function", Package: pkgB.ID}
+	fnC := analyzer.Node{ID: "fn:c", Kind: "function", Package: pkgC.ID}
+	snapshot := analyzer.Snapshot{Nodes: []analyzer.Node{pkgA, pkgB, pkgC, fnA, fnB, fnC}, Edges: []analyzer.Edge{{ID: "b-a", Source: fnB.ID, Target: fnA.ID, Kind: "calls"}, {ID: "c-a", Source: fnC.ID, Target: fnA.ID, Kind: "calls"}}}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	for _, unit := range landscape.Units {
+		if unit.Unit.ID == pkgA.ID {
+			factor := factorByID(unit.Impact, "cross-team-dependents")
+			if unit.Unit.Team != "@one" || strings.Join(unit.Unit.Teams, ",") != "@one,@shared" || factor.Status != "observed" || factor.RawValue != 1 {
+				t.Fatalf("ownership signal missing: %#v", unit)
+			}
+		}
+	}
+}
+
+func TestCalculateLeavesCrossTeamFactorsUnavailableForUnknownRelationships(t *testing.T) {
+	owned := analyzer.Node{ID: "pkg:owned", Kind: "package", Label: "owned", Owner: "@one"}
+	unknown := analyzer.Node{ID: "pkg:unknown", Kind: "package", Label: "unknown"}
+	ownedFn := analyzer.Node{ID: "fn:owned", Kind: "function", Package: owned.ID}
+	unknownFn := analyzer.Node{ID: "fn:unknown", Kind: "function", Package: unknown.ID}
+	snapshot := analyzer.Snapshot{
+		Nodes: []analyzer.Node{owned, unknown, ownedFn, unknownFn},
+		Edges: []analyzer.Edge{
+			{ID: "unknown-owned", Source: unknownFn.ID, Target: ownedFn.ID, Kind: "calls"},
+			{ID: "owned-unknown", Source: ownedFn.ID, Target: unknownFn.ID, Kind: "calls"},
+		},
+	}
+	landscape := Calculate("repo", 1, snapshot, &history.Result{}, 90, time.Now())
+	for _, unit := range landscape.Units {
+		if unit.Unit.ID != owned.ID {
+			continue
+		}
+		incoming := factorByID(unit.Impact, "cross-team-dependents")
+		outgoing := factorByID(unit.ChangeComplexity, "cross-team-dependencies")
+		if incoming.Status != "unavailable" || outgoing.Status != "unavailable" {
+			t.Fatalf("unknown relationship ownership became observed zero: incoming=%#v outgoing=%#v", incoming, outgoing)
+		}
+	}
+}
+
+func factorByID(dimension Dimension, id string) Factor {
+	for _, factor := range dimension.Factors {
+		if factor.ID == id {
+			return factor
+		}
+	}
+	return Factor{}
+}

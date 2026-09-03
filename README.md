@@ -1,6 +1,6 @@
 # Aegir
 
-Aegir is a local-first system-understanding tool. It indexes a local Git repository, persists a code graph in SQLite, runs deterministic analyses, and serves an engineering workspace for exploring dependencies and impact.
+Aegir is a local-first code-intelligence tool. It indexes a local Git repository, ranks the architectural areas that deserve attention, and uses an evidence-backed semantic graph to explain dependencies and impact.
 
 ## Run locally
 
@@ -31,12 +31,17 @@ Each semantic branch initially shows at most eight nodes. Additional nodes are r
 
 ## Current product path
 
+- Attention Summary and a package-level Attention Map: impact/criticality × change complexity, with recency-weighted change velocity as bubble area
+- Inspectable factor contributions, signal coverage, source/Git evidence, configurable 30/90/180-day windows, search, region filters and graph drill-down
+- Change-review attention overlays that rank touched packages against the repository baseline
 - Go AST indexing for packages, functions, methods, tests, calls, imports, common HTTP routes, and conservative data-flow discovery for SQL, messaging, caches, and external HTTP
 - Contract normalization and historical compatibility diffs for OpenAPI, AsyncAPI, JSON/YAML schemas, and protobuf files
 - Persistent repository snapshots, nodes, edges, and analysis results in `.aegir/aegir.db`
 - Deterministic impact queries, package-cycle/fan-out/complexity/ownership rules, static test reachability, and optional Go coverprofile measurements
 - Read-only local Git-ref/worktree reviews with persisted graph, rule, and contract diffs
 - Real repository overview, dependency/data-flow/runtime/impact/complexity/coverage/contract/lint layers, rules, search, review, and re-index workflows
+
+The deterministic score contract, cache behavior and calibration process are documented in [docs/ATTENTION_MODEL.md](docs/ATTENTION_MODEL.md).
 
 Runtime facts can be imported in Settings from a JSON array. Identify each node with `nodeId`, or with a unique `label` and optional repository-relative `file`. Every record requires `source` and `window` plus at least one measured metric:
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
-  Activity, AlertTriangle, ArrowRight, Database, FileCode2, GitBranch, GitCompare, GitPullRequest,
+  Activity, AlertTriangle, Database, GitCompare, GitPullRequest,
   LayoutDashboard, Loader2, Maximize2, Minimize2, Moon, Network, PanelLeftClose, PanelLeftOpen,
   PanelRightClose, PanelRightOpen, Plus, RefreshCw, Search, Settings, ShieldAlert, Sun,
 } from 'lucide-react';
@@ -31,6 +31,9 @@ import { abstractionShortcutForEvent, type ShortcutEventLike } from '../interact
 import { mixedAbstractionGraph } from '../graph/mixedAbstraction';
 import { edgePrototypeStages, type EdgePrototypeMetrics, type EdgePrototypeStage } from '../edges/prototypes';
 import { filterSymbols } from './symbolFilter';
+import { AttentionOverview } from '../attention/AttentionOverview';
+import { ReviewAttentionBar } from '../attention/ReviewAttentionBar';
+import type { AttentionLandscape, AttentionUnit } from '../attention/types';
 
 type Screen = 'overview' | 'explorer' | 'pulls' | 'rules' | 'search' | 'settings';
 type ExplorerMode = 'dependencies' | 'data flow' | 'runtime' | 'impact' | 'coverage' | 'complexity' | 'contracts' | 'lint' | 'what-can-break' | 'hot-path' | 'state-mutation' | 'retry-paths' | 'transaction-boundaries' | 'cross-team-dependencies' | 'what-changed-architecturally';
@@ -67,6 +70,11 @@ const NAV: [Screen, string, ComponentType<{ className?: string }>][] = [
   ['search', 'Search', Search],
   ['settings', 'Settings', Settings],
 ];
+
+function screenFromURL(): Screen {
+  const value = new URL(window.location.href).searchParams.get('view');
+  return NAV.some(([screen]) => screen === value) ? value as Screen : 'overview';
+}
 
 function Onboarding() {
   const { addRepository, loading, error, clearError } = useProduct();
@@ -214,8 +222,10 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const [edgePrototypeMetrics, setEdgePrototypeMetrics] = useState<EdgePrototypeMetrics>();
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [contractDiff, setContractDiff] = useState<ContractDiff>();
+  const [attentionLandscape, setAttentionLandscape] = useState<AttentionLandscape>();
   const nodes = snapshot?.nodes ?? [];
   const edges = snapshot?.edges ?? [];
+  const contextKey = `snapshot:${active?.id ?? 'none'}:${snapshot?.id ?? 'none'}`;
   const canonicalGraphIndex = useMemo(() => createGraphIndex(nodes, edges, snapshot?.evidence ?? [], {
     telemetry: snapshot?.analysis.telemetry,
     findingNodeIds: snapshot?.analysis.violations.flatMap((violation) => violation.path.length ? violation.path : [violation.primaryNode]),
@@ -232,7 +242,7 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
   const activePathEdgeIds = useMemo(() => new Set(activePath?.edgeIds ?? []), [activePath]);
 
   useEffect(() => {
-    dispatch({ type: 'resetContext', contextKey: `snapshot:${active?.id ?? 'none'}:${snapshot?.id ?? 'none'}`, projectionId: 'dependencies' });
+    if (investigation.contextKey !== contextKey) dispatch({ type: 'resetContext', contextKey, projectionId: 'dependencies' });
     setContractDiff(undefined);
     setPathResult(undefined);
     setPathTargetId('');
@@ -241,7 +251,7 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
     setAgentApplied('');
     setCommandError('');
     setMixedDetail(false);
-  }, [active?.id, snapshot?.id, dispatch]);
+  }, [contextKey, dispatch]);
   useEffect(() => { setPathResult(undefined); setSelectedPathIndex(0) }, [projectedSelected, pathQueryId, investigation.evidencePolicy.maximumLevel, investigation.evidencePolicy.includeStale]);
   useEffect(() => {
     if (mode !== 'contracts' || !active || !snapshot) return;
@@ -252,6 +262,16 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
       .catch(() => { if (current) setContractDiff(undefined) });
     return () => { current = false };
   }, [mode, active, snapshot?.id]);
+  useEffect(() => {
+    if (mode !== 'impact' || !active || !snapshot) return;
+    const controller = new AbortController();
+    const requestedWindow = Number(new URL(window.location.href).searchParams.get('window'));
+    const windowDays = requestedWindow === 30 || requestedWindow === 180 ? requestedWindow : 90;
+    fetch(`/api/repositories/${active.id}/attention?snapshot=${snapshot.id}&window=${windowDays}`, { signal: controller.signal })
+      .then((response) => response.ok ? response.json() as Promise<AttentionLandscape> : Promise.reject(new Error('Attention profile unavailable.')))
+      .then(setAttentionLandscape).catch((cause) => { if (cause.name !== 'AbortError') setAttentionLandscape(undefined) });
+    return () => controller.abort();
+  }, [mode, active?.id, snapshot?.id]);
 
   const violations = snapshot?.analysis.violations ?? [];
   const lintRoots = mode === 'lint' && !selected ? [...new Set(violations.flatMap((violation) => violation.path.length ? violation.path : [violation.primaryNode]).flatMap((id) => abstractionGraph.canonicalToRepresentative.get(id) ?? []))] : undefined;
@@ -353,6 +373,9 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
   }, [graph.nodes, graph.edges, graph.visibleGraph.nodes, mode, coverage, complexity, telemetry, violations, snapshot, contractDiff, projectedPins, activePath, mixedDetail, investigation.abstraction]);
 
   const selectedNode = projectedSelected ? graphIndex.nodeById.get(projectedSelected) : undefined;
+  const selectedCanonicalNode = selected ? nodes.find((node) => node.id === selected) : undefined;
+  const attentionUnitID = selectedNode?.kind === 'package' ? selectedNode.id : selectedCanonicalNode?.pkg;
+  const selectedAttentionUnit = attentionLandscape?.units.find((unit) => unit.unit.id === attentionUnitID);
   useEffect(() => {
     if (!selected || nodes.length === 0 || nodes.some((node) => node.id === selected)) return;
     dispatch({ type: 'reconcileFocalNode', nodeId: reconcileMissingFocal(investigation, new Set(nodes.map((node) => node.id)), graph.visibleGraph.rootNodeIds[0] ?? nodes[0]?.id) });
@@ -400,7 +423,7 @@ function Explorer({ theme, focusMode, setFocusMode }: GraphViewProps) {
         </aside>}
         <main className="relative min-w-0 flex-1"><SystemGraph nodes={graph.nodes} edges={graph.edges} frontiers={graph.aggregates} decor={decor} selected={projectedSelected} selectedEdge={selectedEdgeId} onSelect={selectGraphNode} onEdgeSelect={(id) => dispatch({ type: 'selectEntity', entity: { kind: 'edge', id } })} anchorNodeId={projectedSelected ?? graph.visibleGraph.rootNodeIds[0]} pinnedNodeIds={projectedPins} lockedPathNodeIds={investigation.lockedPath?.nodeIds} topologyRevision={graph.visibleGraph.revision} layoutStrategy={projectionDefinitions[mode].layoutStrategy} edgePrototypeStage={edgePrototypeStage} pathEdgeIds={activePathEdgeIds} onEdgePrototypeMetrics={(next) => setEdgePrototypeMetrics((current) => current && current.crossingCount.baseline === next.crossingCount.baseline && current.crossingCount.prototype === next.crossingCount.prototype && current.directionRecognition === next.directionRecognition && current.clickAccuracy === next.clickAccuracy && current.focalPathComprehension === next.focalPathComprehension && current.layoutTimeMs === next.layoutTimeMs && current.routingDecision === next.routingDecision ? current : next)} minimap theme={theme} />{focusMode && <button onClick={() => setFocusMode(false)} aria-label="Exit focus mode" className="absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/90 px-2.5 py-1.5 text-[11px] text-zinc-300 shadow-lg hover:bg-zinc-800"><Minimize2 className="h-3.5 w-3.5" /> Exit focus</button>}</main>
         {!focusMode && inspectorOpen && <aside className="w-[310px] shrink-0 overflow-y-auto border-l border-zinc-800 p-3">
-          {selectedFrontier?.kind === 'frontier' ? <FrontierInspector frontier={selectedFrontier.frontier} expand={() => dispatch({ type: 'expandFrontier', frontierId: selectedFrontier.frontier.id, beyondDepth: !selectedFrontier.frontier.withinDepth })} /> : selectedEdge ? <EdgeInspector edge={selectedEdge} nodes={[...graphIndex.nodes]} evidence={evidenceForEdge(graphIndex, selectedEdge)} reason={selectedVisibleEdge?.reason.detail} introduced={selectedEdgeIntroduction ? `${selectedEdgeIntroduction.review.baseRef} → ${selectedEdgeIntroduction.review.headRef}` : undefined} onSelectNode={(id) => dispatch({ type: 'setFocalNode', nodeId: id })} /> : selectedNode ? <><div className="flex items-center gap-2"><KindIcon kind={selectedNode.kind} /><Badge>{selectedNode.kind}</Badge><Badge>{selectedNode.abstractionLevel ?? investigation.abstraction}</Badge><button onClick={() => dispatch({ type: investigation.pinnedNodeIds.includes(selectedNode.id) ? 'unpinNode' : 'pinNode', nodeId: selectedNode.id })} disabled={!investigation.pinnedNodeIds.includes(selectedNode.id) && investigation.pinnedNodeIds.length >= 5} className="ml-auto rounded border border-zinc-700 px-2 py-1 text-[9px] text-zinc-300 disabled:opacity-40">{investigation.pinnedNodeIds.includes(selectedNode.id) ? 'Unpin' : 'Pin'}</button></div><h2 className="mt-2 break-words font-mono text-[13px] text-zinc-50">{selectedNode.label}</h2>{selectedNode.representedNodeIds && selectedNode.representedNodeIds.length > 1 && <div className="mt-1 text-[10px] text-zinc-500">Contains {selectedNode.representedNodeIds.length} canonical nodes.</div>}<div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{selectedNode.file}</div>{selectedVisibleNode?.kind === 'real' && <RankInspector score={selectedVisibleNode.score} />}{mode === 'coverage' && coverage.get(selectedNode.id) && <div className="mt-4 rounded-md border border-zinc-800 p-2"><div className="font-mono text-[18px] text-zinc-100">{coverage.get(selectedNode.id)?.line ?? '—'}%</div><div className="mt-1 text-[10px] text-zinc-500">{coverage.get(selectedNode.id)?.note}</div></div>}{mode === 'complexity' && <><>{complexity.get(selectedNode.id) && <ComplexityInspector item={complexity.get(selectedNode.id)!} />}</><StructuralInspector item={structuralAnalytics.nodes.find((item) => item.nodeId === selectedNode.id)} /></>}{mode === 'runtime' && telemetry.get(selectedNode.id) && <RuntimeInspector item={telemetry.get(selectedNode.id)!} />}{mode === 'contracts' ? <ContractInspector diff={contractDiff} contractID={selectedNode.id} /> : <div className="mt-4 border-t border-zinc-800 pt-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationships in scope</div>{graph.edges.filter((edge) => edge.source === projectedSelected || edge.target === projectedSelected).slice(0, 30).map((edge) => { const other = graphIndex.nodeById.get(edge.source === projectedSelected ? edge.target : edge.source); return <button key={edge.id} onClick={() => other && dispatch({ type: 'setFocalNode', nodeId: other.id })} className="mt-1 flex w-full items-center gap-2 text-left text-[10.5px] text-zinc-300 hover:text-sky-200"><Badge>{edge.kind}</Badge><span className="truncate font-mono">{other?.label}</span></button> })}</div>}</> : <div className="text-zinc-500">Select a node, edge, or frontier.</div>}
+          {selectedFrontier?.kind === 'frontier' ? <FrontierInspector frontier={selectedFrontier.frontier} expand={() => dispatch({ type: 'expandFrontier', frontierId: selectedFrontier.frontier.id, beyondDepth: !selectedFrontier.frontier.withinDepth })} /> : selectedEdge ? <EdgeInspector edge={selectedEdge} nodes={[...graphIndex.nodes]} evidence={evidenceForEdge(graphIndex, selectedEdge)} reason={selectedVisibleEdge?.reason.detail} introduced={selectedEdgeIntroduction ? `${selectedEdgeIntroduction.review.baseRef} → ${selectedEdgeIntroduction.review.headRef}` : undefined} onSelectNode={(id) => dispatch({ type: 'setFocalNode', nodeId: id })} /> : selectedNode ? <><div className="flex items-center gap-2"><KindIcon kind={selectedNode.kind} /><Badge>{selectedNode.kind}</Badge><Badge>{selectedNode.abstractionLevel ?? investigation.abstraction}</Badge><button onClick={() => dispatch({ type: investigation.pinnedNodeIds.includes(selectedNode.id) ? 'unpinNode' : 'pinNode', nodeId: selectedNode.id })} disabled={!investigation.pinnedNodeIds.includes(selectedNode.id) && investigation.pinnedNodeIds.length >= 5} className="ml-auto rounded border border-zinc-700 px-2 py-1 text-[9px] text-zinc-300 disabled:opacity-40">{investigation.pinnedNodeIds.includes(selectedNode.id) ? 'Unpin' : 'Pin'}</button></div><h2 className="mt-2 break-words font-mono text-[13px] text-zinc-50">{selectedNode.label}</h2>{selectedNode.representedNodeIds && selectedNode.representedNodeIds.length > 1 && <div className="mt-1 text-[10px] text-zinc-500">Contains {selectedNode.representedNodeIds.length} canonical nodes.</div>}<div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{selectedNode.file}</div>{selectedAttentionUnit && <AttentionGraphInspector unit={selectedAttentionUnit} />}{selectedVisibleNode?.kind === 'real' && <RankInspector score={selectedVisibleNode.score} />}{mode === 'coverage' && coverage.get(selectedNode.id) && <div className="mt-4 rounded-md border border-zinc-800 p-2"><div className="font-mono text-[18px] text-zinc-100">{coverage.get(selectedNode.id)?.line ?? '—'}%</div><div className="mt-1 text-[10px] text-zinc-500">{coverage.get(selectedNode.id)?.note}</div></div>}{mode === 'complexity' && <><>{complexity.get(selectedNode.id) && <ComplexityInspector item={complexity.get(selectedNode.id)!} />}</><StructuralInspector item={structuralAnalytics.nodes.find((item) => item.nodeId === selectedNode.id)} /></>}{mode === 'runtime' && telemetry.get(selectedNode.id) && <RuntimeInspector item={telemetry.get(selectedNode.id)!} />}{mode === 'contracts' ? <ContractInspector diff={contractDiff} contractID={selectedNode.id} /> : <div className="mt-4 border-t border-zinc-800 pt-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Relationships in scope</div>{graph.edges.filter((edge) => edge.source === projectedSelected || edge.target === projectedSelected).slice(0, 30).map((edge) => { const other = graphIndex.nodeById.get(edge.source === projectedSelected ? edge.target : edge.source); return <button key={edge.id} onClick={() => other && dispatch({ type: 'setFocalNode', nodeId: other.id })} className="mt-1 flex w-full items-center gap-2 text-left text-[10.5px] text-zinc-300 hover:text-sky-200"><Badge>{edge.kind}</Badge><span className="truncate font-mono">{other?.label}</span></button> })}</div>}</> : <div className="text-zinc-500">Select a node, edge, or frontier.</div>}
         </aside>}
       </div>
     </div>
@@ -419,6 +442,15 @@ function FrontierInspector({ frontier, expand }: { frontier: import('../graph/ty
 
 function RankInspector({ score }: { score: import('../graph/types').CandidateExplanation }) {
   return <details className="mt-3 rounded-md border border-zinc-800 p-2"><summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Why ranked · {score.total.toFixed(2)}</summary><div className="mt-2 text-[10px] text-zinc-300">{score.reason}</div>{score.components.map((component) => <div key={component.signal} className="mt-1 flex items-center gap-2 font-mono text-[9.5px]"><span className="w-[76px] text-zinc-400">{component.signal}</span><span className="text-zinc-600">{component.normalized.toFixed(2)} × {component.weight}</span><span className="ml-auto text-sky-300">+{component.contribution.toFixed(2)}</span></div>)}<pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-zinc-950 p-2 text-[8.5px] text-zinc-600">{JSON.stringify(score, null, 2)}</pre></details>;
+}
+
+function AttentionGraphInspector({ unit }: { unit: AttentionUnit }) {
+  const strongest = [
+    ...unit.impact.factors.map((factor) => ({ ...factor, dimension: 'impact' })),
+    ...unit.changeComplexity.factors.map((factor) => ({ ...factor, dimension: 'complexity' })),
+    ...unit.changeVelocity.factors.map((factor) => ({ ...factor, dimension: 'velocity' })),
+  ].filter((factor) => factor.status === 'observed' && factor.contribution > 0).sort((left, right) => right.contribution - left.contribution || left.id.localeCompare(right.id)).slice(0, 3);
+  return <details open className="mt-3 rounded-md border border-sky-900/70 bg-sky-950/10 p-2"><summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-sky-400">Attention explanation · priority {unit.priority}</summary><div className="mt-2 grid grid-cols-3 gap-1">{[['impact', unit.impact.score], ['complexity', unit.changeComplexity.score], ['velocity', unit.changeVelocity.score]].map(([label, score]) => <div key={label} className="rounded bg-zinc-950 p-1.5 text-center"><div className="font-mono text-[13px] text-zinc-100">{score ?? '—'}</div><div className="text-[8px] uppercase text-zinc-600">{label}</div></div>)}</div>{strongest.map((factor) => <div key={`${factor.dimension}:${factor.id}`} className="mt-2 flex gap-2 text-[9px]"><span className="min-w-0 flex-1 text-zinc-400">{factor.label}</span><span className="shrink-0 font-mono text-zinc-200">{factor.displayValue}</span></div>)}</details>;
 }
 
 function ComplexityInspector({ item }: { item: { cyclomatic: number; loc: number; fanIn: number; fanOut: number; score: number } }) {
@@ -442,21 +474,6 @@ function ContractInspector({ diff, contractID }: { diff?: ContractDiff; contract
   if (!change) return <div className="mt-4 rounded-md border border-emerald-900/50 bg-emerald-950/20 p-2 text-[10.5px] text-emerald-200">No semantic contract changes since snapshot {diff.baseSnapshotId}.</div>;
   const tone = change.compatibility === 'break' ? 'red' : change.compatibility === 'potential' ? 'orange' : change.compatibility === 'conditional' ? 'amber' : 'green';
   return <div className="mt-4"><div className="flex items-center gap-2"><Badge tone={tone}>{change.compatibility.toUpperCase()}</Badge><span className="font-mono text-[10px] text-zinc-500">snapshot {diff.baseSnapshotId} → {diff.headSnapshotId}</span></div><div className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Field changes</div>{change.fields.map((field) => <div key={`${field.kind}:${field.path}`} className="border-b border-zinc-800 py-2"><div className="flex items-center gap-2"><Badge tone={field.kind === 'removed' || field.compat === 'break' ? 'red' : field.kind === 'added' ? 'green' : 'amber'}>{field.kind}</Badge><span className="min-w-0 truncate font-mono text-[10px] text-zinc-300">{field.path}</span></div><div className="mt-1 text-[10px] text-zinc-500">{field.note}</div>{field.before && <div className="mt-1 truncate font-mono text-[9.5px] text-red-300">− {field.before}</div>}{field.after && <div className="truncate font-mono text-[9.5px] text-emerald-300">+ {field.after}</div>}</div>)}</div>;
-}
-
-function Stat({ icon: Icon, label, value, tone = 'text-zinc-50' }: { icon: ComponentType<{ className?: string }>; label: string; value: number; tone?: string }) {
-  return <div className="rounded-md border border-zinc-800 bg-zinc-900/30 p-3"><Icon className="h-4 w-4 text-zinc-500" /><div className={cn('mt-3 font-mono text-[20px]', tone)}>{value}</div><div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div></div>;
-}
-
-function Overview({ openExplorer }: { openExplorer: () => void }) {
-  const { snapshot, active, reindex, loading } = useProduct();
-  if (!snapshot || !active) return null;
-  const counts = Object.entries(snapshot.nodes.reduce<Record<string, number>>((all, node) => { all[node.kind] = (all[node.kind] ?? 0) + 1; return all }, {}));
-  return <div className="h-full overflow-y-auto p-5"><div className="mx-auto max-w-[1200px]"><div className="flex items-end justify-between"><div><div className="font-mono text-[10px] text-zinc-500">{active.path} · {active.head?.slice(0, 12) || 'working tree'}</div><h1 className="text-[18px] font-semibold">{active.name}</h1></div><Btn onClick={() => void reindex()} disabled={loading}>{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Re-index</Btn></div>
-    <div className="mt-5 grid grid-cols-4 gap-3"><Stat icon={Network} label="system nodes" value={snapshot.stats.nodes} /><Stat icon={GitBranch} label="relationships" value={snapshot.stats.edges} /><Stat icon={ShieldAlert} label="violations" value={snapshot.stats.violations} tone="text-amber-300" /><Stat icon={FileCode2} label="contracts" value={snapshot.stats.contracts} /></div>
-    <div className="mt-4 rounded-md border border-zinc-800"><div className="flex items-center border-b border-zinc-800 px-3 py-2"><span className="text-[11px] font-semibold">Indexed system model</span><Btn size="xs" className="ml-auto" onClick={openExplorer}>Open explorer <ArrowRight className="h-3 w-3" /></Btn></div><div className="flex flex-wrap gap-x-5 gap-y-2 p-3">{counts.map(([kind, count]) => <div key={kind} className="font-mono text-[11px] text-zinc-400"><span className="text-zinc-100">{count}</span> {kind}</div>)}</div></div>
-    <div className="mt-4 rounded-md border border-zinc-800"><div className="border-b border-zinc-800 px-3 py-2 text-[11px] font-semibold">Highest-priority deterministic findings</div>{snapshot.analysis.violations.slice(0, 10).map((violation) => <div key={violation.id} className="flex items-start gap-3 border-b border-zinc-800/60 px-3 py-2 last:border-0"><SeverityBadge severity={snapshot.analysis.rules.find((rule) => rule.id === violation.ruleId)?.severity ?? 'medium'} /><div><div className="text-[11.5px] text-zinc-200">{violation.title}</div><div className="mt-0.5 text-[10.5px] text-zinc-500">{violation.detail}</div></div></div>)}</div>
-  </div></div>;
 }
 
 function RulesScreen() {
@@ -653,6 +670,7 @@ function ReviewScreen({ theme, focusMode, setFocusMode }: GraphViewProps) {
         {timelineError && <div className="mt-2 flex items-center gap-2 text-[11px] text-amber-300"><span>Review created, but timeline sync failed: {timelineError}</span><button type="button" onClick={() => void syncTimeline()} className="underline">Retry timeline sync</button></div>}
         {(['base', 'head'] as const).map((side) => reviewSnapshotErrors[side] && <div key={side} className="mt-2 flex items-center gap-2 text-[11px] text-amber-300"><span>{reviewSnapshotErrors[side]}</span><button type="button" onClick={() => void loadReviewSnapshot(side)} className="underline">Retry {side} snapshot</button></div>)}
       </header>}
+      {!focusMode && <ReviewAttentionBar reviewId={review.id} theme={theme} openUnit={(nodeId) => { setReviewSnapshotSide('delta'); setReviewPolicy('blast-radius'); dispatch({ type: 'setAbstraction', abstraction: 'package' }); dispatch({ type: 'setProjection', projectionId: 'impact' }); dispatch({ type: 'setFocalNode', nodeId }) }} />}
       {!focusMode && <InvestigationBreadcrumbs nodes={review.nodes} />}
       {!focusMode && <ArchitectureEvolutionBar changes={architectureEvolution.changes} loading={(!reviewSnapshots.base && !reviewSnapshotErrors.base) || (!reviewSnapshots.head && !reviewSnapshotErrors.head)} unavailable={Boolean(reviewSnapshotErrors.base || reviewSnapshotErrors.head)} open={(change) => { setReviewSnapshotSide('delta'); setReviewPolicy('changes-impact'); if (change.edgeIds[0]) dispatch({ type: 'selectEntity', entity: { kind: 'edge', id: change.edgeIds[0] } }); else if (change.nodeIds[0]) dispatch({ type: 'setFocalNode', nodeId: change.nodeIds[0] }) }} />}
       {!focusMode && <EdgePrototypeBar stage={edgePrototypeStage} setStage={setEdgePrototypeStage} />}
@@ -693,8 +711,9 @@ function AbstractionShortcutController({ enabled }: { enabled: boolean }) {
 
 export function ProductApp() {
   const { repositories, active, snapshot, snapshotError, repositorySyncError, timelineSyncError, loading, error, selectRepository, selectSnapshot, refreshRepositories, refreshTimeline } = useProduct();
+  const { dispatch } = useInvestigation();
   const [theme, setTheme] = useState<'light' | 'dark'>(() => window.localStorage.getItem('aegir-theme') === 'light' ? 'light' : 'dark');
-  const [screen, setScreen] = useState<Screen>('overview');
+  const [screen, setScreen] = useState<Screen>(screenFromURL);
   const [railOpen, setRailOpen] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
   useEffect(() => {
@@ -703,6 +722,18 @@ export function ProductApp() {
     document.documentElement.style.colorScheme = theme;
     window.localStorage.setItem('aegir-theme', theme);
   }, [theme]);
+  useEffect(() => {
+    const restore = () => setScreen(screenFromURL());
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, []);
+  const navigateScreen = useCallback((next: Screen) => {
+    if (next === screen) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('view', next);
+    window.history.pushState({}, '', url);
+    setScreen(next);
+  }, [screen]);
   if (!loading && repositories.length === 0) return <Onboarding />;
   const graphViewProps: GraphViewProps = { theme, focusMode, setFocusMode };
   return (
@@ -716,13 +747,13 @@ export function ProductApp() {
           <button onClick={() => setRailOpen(false)} aria-label="Hide navigation rail" title="Hide navigation rail" className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><PanelLeftClose className="h-3.5 w-3.5" /></button>
         </div>
         <div className="border-b border-zinc-800 p-2"><select value={active?.id ?? ''} onChange={(event) => selectRepository(event.target.value)} className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]">{repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name}</option>)}</select></div>
-        <nav className="p-2">{NAV.map(([id, label, Icon]) => <button key={id} onClick={() => setScreen(id)} className={cn('mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11.5px]', screen === id ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}><Icon className="h-3.5 w-3.5" />{label}</button>)}</nav>
+        <nav className="p-2">{NAV.map(([id, label, Icon]) => <button key={id} onClick={() => navigateScreen(id)} className={cn('mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11.5px]', screen === id ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900')}><Icon className="h-3.5 w-3.5" />{label}</button>)}</nav>
         <div className="mt-auto border-t border-zinc-800 p-2"><button onClick={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-zinc-500 hover:bg-zinc-900">{theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}{theme === 'dark' ? 'Light' : 'Dark'} theme</button></div>
       </aside>}
       <div className="relative min-w-0 flex-1">
         {(snapshotError || repositorySyncError || timelineSyncError) && <div className="absolute right-3 top-3 z-50 rounded-md border border-amber-900/60 bg-zinc-950/95 px-3 py-2 text-[10px] text-amber-200">{snapshotError && <div>Snapshot {snapshotError.snapshotId} failed to load: {snapshotError.message} <button type="button" onClick={() => void selectSnapshot(snapshotError.snapshotId)} className="ml-1 underline">Retry</button></div>}{repositorySyncError && <div>Re-indexed, but repository sync failed: {repositorySyncError} <button type="button" onClick={() => void refreshRepositories().catch(() => {})} className="ml-1 underline">Retry</button></div>}{timelineSyncError && <div>Timeline sync failed: {timelineSyncError} <button type="button" onClick={() => void refreshTimeline().catch(() => {})} className="ml-1 underline">Retry</button></div>}</div>}
         {!railOpen && !focusMode && <button onClick={() => setRailOpen(true)} aria-label="Show navigation rail" title="Show navigation rail" className="absolute bottom-3 left-3 z-50 rounded-md border border-zinc-700 bg-zinc-950/90 p-2 text-zinc-400 shadow-lg hover:bg-zinc-800 hover:text-zinc-100"><PanelLeftOpen className="h-4 w-4" /></button>}
-        {loading && !snapshot ? <div className="flex h-full items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-sky-300" /></div> : error ? <div className="p-5 text-red-300">{error}</div> : screen === 'overview' ? <Overview openExplorer={() => setScreen('explorer')} /> : screen === 'explorer' ? <Explorer {...graphViewProps} /> : screen === 'rules' ? <RulesScreen /> : screen === 'search' ? <SearchScreen /> : screen === 'settings' ? <SettingsScreen /> : <ReviewScreen {...graphViewProps} />}
+        {loading && !snapshot ? <div className="flex h-full items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-sky-300" /></div> : error ? <div className="p-5 text-red-300">{error}</div> : screen === 'overview' ? <AttentionOverview theme={theme} openUnit={(nodeId) => { if (!active || !snapshot) return; dispatch({ type: 'openAttentionUnit', contextKey: `snapshot:${active.id}:${snapshot.id}`, nodeId }); navigateScreen('explorer') }} /> : screen === 'explorer' ? <Explorer {...graphViewProps} /> : screen === 'rules' ? <RulesScreen /> : screen === 'search' ? <SearchScreen /> : screen === 'settings' ? <SettingsScreen /> : <ReviewScreen {...graphViewProps} />}
       </div>
     </div>
   );

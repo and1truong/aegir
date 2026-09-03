@@ -4,6 +4,7 @@ import { createInvestigationState, type InvestigationState, type ProjectionId, t
 
 export type InvestigationAction =
   | { type: 'resetContext'; contextKey: string; projectionId?: ProjectionId }
+  | { type: 'openAttentionUnit'; contextKey: string; nodeId: string }
   | { type: 'hydrateView'; state: InvestigationState }
   | { type: 'setFocalNode'; nodeId?: string }
   | { type: 'reconcileFocalNode'; nodeId?: string }
@@ -26,6 +27,10 @@ export type InvestigationAction =
 
 export function investigationReducer(state: InvestigationState, action: InvestigationAction): InvestigationState {
   switch (action.type) {
+    case 'openAttentionUnit': {
+      const next = createInvestigationState({ contextKey: action.contextKey, projectionId: 'impact' });
+      return { ...next, focalNodeId: action.nodeId, selectedEntity: { kind: 'node', id: action.nodeId }, abstraction: 'package' };
+    }
     case 'hydrateView':
       return action.state;
     case 'resetContext':

@@ -74,6 +74,7 @@ func TestCompareReviewIDIncludesCanonicalNodeFields(t *testing.T) {
 		"file":        func(node *analyzer.Node) { node.File = "other.go" },
 		"description": func(node *analyzer.Node) { node.Description = "other" },
 		"tags":        func(node *analyzer.Node) { node.Tags = []string{"b"} },
+		"owners":      func(node *analyzer.Node) { node.Owners = []string{"two"} },
 		"metadata":    func(node *analyzer.Node) { node.Meta["owner"] = "two" },
 	}
 	for name, mutate := range tests {
@@ -93,6 +94,11 @@ func TestCompareReviewIDIncludesCanonicalNodeFields(t *testing.T) {
 	ordered.Tags = []string{"a", "b"}
 	if Compare("repo", "base", "head", 1, 2, analyzer.Snapshot{Nodes: []analyzer.Node{ordered}}, analyzer.Snapshot{Nodes: []analyzer.Node{ordered}}).ID != Compare("repo", "base", "head", 3, 4, analyzer.Snapshot{Nodes: []analyzer.Node{reordered}}, analyzer.Snapshot{Nodes: []analyzer.Node{reordered}}).ID {
 		t.Fatal("tag ordering changed canonical node identity")
+	}
+	ordered.Owners = []string{"a", "b"}
+	reordered.Owners = []string{"b", "a"}
+	if Compare("repo", "base", "head", 1, 2, analyzer.Snapshot{Nodes: []analyzer.Node{ordered}}, analyzer.Snapshot{Nodes: []analyzer.Node{ordered}}).ID != Compare("repo", "base", "head", 3, 4, analyzer.Snapshot{Nodes: []analyzer.Node{reordered}}, analyzer.Snapshot{Nodes: []analyzer.Node{reordered}}).ID {
+		t.Fatal("owner ordering changed canonical node identity")
 	}
 }
 

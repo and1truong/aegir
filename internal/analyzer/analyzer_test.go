@@ -227,8 +227,8 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 		".git/HEAD":          "0123456789abcdef\n",
 		"go.mod":             "module example.com/routes\n\ngo 1.24\n",
 		"auth/middleware.go": "package auth\nfunc Require() {}\n",
-		"orders/handler.go":  "package orders\ntype AdminHandler struct{}\ntype PublicHandler struct{}\nfunc (h *AdminHandler) Handle() {}\nfunc (h *PublicHandler) Handle() {}\nfunc NewHandler() *PublicHandler { return &PublicHandler{} }\n",
-		"routes/register.go": "package routes\nimport (\"example.com/routes/auth\"; \"example.com/routes/orders\"; \"github.com/labstack/echo/v4\")\ntype Router struct{}\ntype Cache struct{}\ntype Server struct { cache Cache }\nfunc (Router) GET(string, any) {}\nfunc (Cache) GET(string, any) {}\nfunc onMiss() {}\nfunc External(g *echo.Group, e *echo.Echo, handlers []*orders.AdminHandler) { g.GET(\"/external-group\", onMiss); e.GET(\"/external-echo\", onMiss, auth.Require); v1 := e.Group(\"/v1\"); v1.GET(\"/external-versioned\", onMiss); e.Group(\"/direct\").GET(\"/external-direct\", onMiss); for _, h := range handlers { e.GET(\"/ranged\", h.Handle) } }\nfunc Chained(server Server) { server.cache.GET(\"/config-field\", onMiss) }\nfunc Register(router Router, api Cache, h *orders.PublicHandler, handlers chan *orders.AdminHandler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.PublicHandler).Handle); fromConstructor := orders.NewHandler(); router.GET(\"/constructor\", fromConstructor.Handle); literal := &orders.PublicHandler{}; router.GET(\"/literal\", literal.Handle); { h := &orders.AdminHandler{}; router.GET(\"/admin\", h.Handle) }; switch { case true: h := &orders.AdminHandler{}; if true { router.GET(\"/switch\", h.Handle) } }; select { case h := <-handlers: if true { router.GET(\"/select\", h.Handle) }; default: }; router.GET(\"/health\", func() {}); api.GET(\"/config\", onMiss) }\n",
+		"orders/handler.go":  "package orders\ntype AdminHandler struct{}\ntype PublicHandler struct{}\ntype Handlers []*AdminHandler\nfunc (h *AdminHandler) Handle() {}\nfunc (h *PublicHandler) Handle() {}\nfunc NewHandler() *PublicHandler { return &PublicHandler{} }\nfunc NewHandlers() Handlers { return Handlers{} }\n",
+		"routes/register.go": "package routes\nimport (\"example.com/routes/auth\"; \"example.com/routes/orders\"; \"github.com/labstack/echo/v4\")\ntype Router struct{}\ntype Cache struct{}\ntype Server struct { cache Cache }\nfunc (Router) GET(string, any) {}\nfunc (Cache) GET(string, any) {}\nfunc onMiss() {}\nfunc makeHandler(any) func() { return onMiss }\nfunc External(g *echo.Group, e *echo.Echo, handlers []*orders.AdminHandler) { g.GET(\"/external-group\", onMiss); e.GET(\"/external-echo\", onMiss, auth.Require); e.GET(\"/factory\", makeHandler(nil), auth.Require); v1 := e.Group(\"/v1\"); v1.GET(\"/orders\", onMiss); e.Group(\"/direct\").GET(\"/orders\", onMiss); for _, h := range handlers { e.GET(\"/ranged\", h.Handle) }; literalHandlers := []*orders.AdminHandler{{}}; for _, h := range literalHandlers { e.GET(\"/ranged-literal\", h.Handle) }; constructorHandlers := orders.NewHandlers(); for _, h := range constructorHandlers { e.GET(\"/ranged-constructor\", h.Handle) }; var namedHandlers orders.Handlers; for _, h := range namedHandlers { e.GET(\"/ranged-named\", h.Handle) } }\nfunc Chained(server Server) { server.cache.GET(\"/config-field\", onMiss) }\nfunc Register(router Router, api Cache, h *orders.PublicHandler, handlers chan *orders.AdminHandler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.PublicHandler).Handle); fromConstructor := orders.NewHandler(); router.GET(\"/constructor\", fromConstructor.Handle); literal := &orders.PublicHandler{}; router.GET(\"/literal\", literal.Handle); { h := &orders.AdminHandler{}; router.GET(\"/admin\", h.Handle) }; switch { case true: h := &orders.AdminHandler{}; if true { router.GET(\"/switch\", h.Handle) } }; select { case h := <-handlers: if true { router.GET(\"/select\", h.Handle) }; default: }; router.GET(\"/health\", func() {}); api.GET(\"/config\", onMiss) }\n",
 	} {
 		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -279,15 +279,20 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 	if connections["GET /health"] != handlerIDs["Register"] {
 		t.Fatalf("inline callback did not fall back to Register: %#v", snapshot.Edges)
 	}
-	for _, label := range []string{"GET /external-group", "GET /external-echo", "GET /external-versioned", "GET /external-direct"} {
+	for _, label := range []string{"GET /external-group", "GET /external-echo", "GET /v1/orders", "GET /direct/orders"} {
 		if connections[label] != handlerIDs["onMiss"] {
 			t.Fatalf("external router receiver for %q was not recognized: %#v", label, snapshot.Edges)
 		}
 	}
-	if connections["GET /ranged"] != handlerIDs["AdminHandler.Handle"] {
-		t.Fatalf("range-bound receiver was not connected to AdminHandler.Handle: %#v", snapshot.Edges)
+	if connections["GET /factory"] != handlerIDs["External"] {
+		t.Fatalf("unresolved Echo handler did not fall back to External: %#v", snapshot.Edges)
 	}
-	if len(endpointIDs) != 13 || endpointIDs["GET /config"] != "" || endpointIDs["GET /config-field"] != "" {
+	for _, label := range []string{"GET /ranged", "GET /ranged-literal", "GET /ranged-constructor", "GET /ranged-named"} {
+		if connections[label] != handlerIDs["AdminHandler.Handle"] {
+			t.Fatalf("range-bound receiver for %q was not connected to AdminHandler.Handle: %#v", label, snapshot.Edges)
+		}
+	}
+	if len(endpointIDs) != 17 || endpointIDs["GET /config"] != "" || endpointIDs["GET /config-field"] != "" {
 		t.Fatalf("unexpected endpoint set: %#v", endpointIDs)
 	}
 }

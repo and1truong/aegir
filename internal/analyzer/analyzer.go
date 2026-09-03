@@ -600,8 +600,10 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 			}
 			return stableID("package", importPath), ""
 		}
-		if bound := boundExpression(fn, value.Name, value.Pos()); bound != nil {
-			return x.receiverReference(fn, bound)
+		if value.Pos() != token.NoPos {
+			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+				return x.receiverReference(fn, bound)
+			}
 		}
 		if x.hasReceiverType(fn.packageID, value.Name) {
 			return fn.packageID, value.Name
@@ -656,7 +658,7 @@ func (x *indexer) hasReceiverType(packageID, name string) bool {
 	return false
 }
 
-func boundExpression(fn function, name string, before token.Pos) ast.Expr {
+func boundExpression(x *indexer, fn function, name string, before token.Pos) ast.Expr {
 	var fallback ast.Expr
 	for _, fields := range []*ast.FieldList{fn.decl.Recv, fn.decl.Type.Params} {
 		if fields == nil {
@@ -670,20 +672,20 @@ func boundExpression(fn function, name string, before token.Pos) ast.Expr {
 			}
 		}
 	}
-	if result := bindingInBlock(fn, fn.decl.Body, name, before); result != nil {
+	if result := bindingInBlock(x, fn, fn.decl.Body, name, before); result != nil {
 		return result
 	}
 	return fallback
 }
 
-func bindingInBlock(fn function, block *ast.BlockStmt, name string, before token.Pos) ast.Expr {
+func bindingInBlock(x *indexer, fn function, block *ast.BlockStmt, name string, before token.Pos) ast.Expr {
 	if block == nil {
 		return nil
 	}
-	return bindingInStatements(fn, block.List, name, before)
+	return bindingInStatements(x, fn, block.List, name, before)
 }
 
-func bindingInStatements(fn function, statements []ast.Stmt, name string, before token.Pos) ast.Expr {
+func bindingInStatements(x *indexer, fn function, statements []ast.Stmt, name string, before token.Pos) ast.Expr {
 	var result ast.Expr
 	for _, statement := range statements {
 		if statement.Pos() >= before {
@@ -695,11 +697,11 @@ func bindingInStatements(fn function, statements []ast.Stmt, name string, before
 			}
 			continue
 		}
-		if binding := bindingFromScopedHeader(fn, statement, name); binding != nil {
+		if binding := bindingFromScopedHeader(x, fn, statement, name); binding != nil {
 			result = binding
 		}
 		if nested := containingStatements(statement, before); nested != nil {
-			if binding := bindingInStatements(fn, nested, name, before); binding != nil {
+			if binding := bindingInStatements(x, fn, nested, name, before); binding != nil {
 				return binding
 			}
 		}
@@ -743,7 +745,7 @@ func bindingFromStatement(statement ast.Stmt, name string) ast.Expr {
 	return nil
 }
 
-func bindingFromScopedHeader(fn function, statement ast.Stmt, name string) ast.Expr {
+func bindingFromScopedHeader(x *indexer, fn function, statement ast.Stmt, name string) ast.Expr {
 	var initializer ast.Stmt
 	switch value := statement.(type) {
 	case *ast.IfStmt:
@@ -760,43 +762,117 @@ func bindingFromScopedHeader(fn function, statement ast.Stmt, name string) ast.E
 	case *ast.CommClause:
 		return bindingFromStatement(value.Comm, name)
 	case *ast.RangeStmt:
-		return rangeBinding(fn, value, name)
+		return x.rangeBinding(fn, value, name)
 	}
 	return bindingFromStatement(initializer, name)
 }
 
-func rangeBinding(fn function, statement *ast.RangeStmt, name string) ast.Expr {
-	sourceType := statement.X
-	if identifier, ok := statement.X.(*ast.Ident); ok {
-		if bound := boundExpression(fn, identifier.Name, statement.Pos()); bound != nil {
-			sourceType = bound
-		}
-	}
+func (x *indexer) rangeBinding(fn function, statement *ast.RangeStmt, name string) ast.Expr {
 	key, keyMatches := statement.Key.(*ast.Ident)
 	value, valueMatches := statement.Value.(*ast.Ident)
 	keyMatches = keyMatches && key.Name == name
 	valueMatches = valueMatches && value.Name == name
-	switch source := sourceType.(type) {
-	case *ast.ArrayType:
-		if valueMatches {
-			return source.Elt
-		}
-	case *ast.MapType:
-		if keyMatches {
-			return source.Key
-		}
-		if valueMatches {
-			return source.Value
-		}
-	case *ast.ChanType:
-		if keyMatches {
-			return source.Value
-		}
+	if !valueMatches && !keyMatches {
+		return nil
 	}
-	if valueMatches || keyMatches {
-		return statement.X
+	packageID, receiverType := x.iterableReceiver(fn, statement.X, keyMatches && !valueMatches)
+	if packageID == "" || receiverType == "" {
+		return nil
+	}
+	if packageID == fn.packageID {
+		return ast.NewIdent(receiverType)
+	}
+	for alias, importPath := range fn.imports {
+		if localID, local := x.localPackageID(importPath); local && localID == packageID {
+			return &ast.SelectorExpr{X: ast.NewIdent(alias), Sel: ast.NewIdent(receiverType)}
+		}
 	}
 	return nil
+}
+
+func (x *indexer) iterableReceiver(fn function, expression ast.Expr, key bool) (string, string) {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if value.Pos() != token.NoPos {
+			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+				return x.iterableReceiver(fn, bound, key)
+			}
+		}
+		if typeFn, underlying, ok := x.namedTypeExpression(fn, value); ok {
+			return x.iterableReceiver(typeFn, underlying, key)
+		}
+	case *ast.SelectorExpr:
+		if typeFn, underlying, ok := x.namedTypeExpression(fn, value); ok {
+			return x.iterableReceiver(typeFn, underlying, key)
+		}
+	case *ast.CompositeLit:
+		return x.iterableReceiver(fn, value.Type, key)
+	case *ast.CallExpr:
+		if identifier, ok := value.Fun.(*ast.Ident); ok && identifier.Name == "make" && len(value.Args) > 0 {
+			return x.iterableReceiver(fn, value.Args[0], key)
+		}
+		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
+			for _, candidate := range x.functions {
+				if candidate.node.ID == id && candidate.decl.Type.Results != nil && len(candidate.decl.Type.Results.List) > 0 {
+					return x.iterableReceiver(candidate, candidate.decl.Type.Results.List[0].Type, key)
+				}
+			}
+		}
+	case *ast.ArrayType:
+		if !key {
+			return x.receiverReference(fn, value.Elt)
+		}
+	case *ast.MapType:
+		if key {
+			return x.receiverReference(fn, value.Key)
+		}
+		return x.receiverReference(fn, value.Value)
+	case *ast.ChanType:
+		return x.receiverReference(fn, value.Value)
+	case *ast.ParenExpr:
+		return x.iterableReceiver(fn, value.X, key)
+	}
+	return "", ""
+}
+
+func (x *indexer) namedTypeExpression(fn function, expression ast.Expr) (function, ast.Expr, bool) {
+	packageID, name := fn.packageID, ""
+	switch value := expression.(type) {
+	case *ast.Ident:
+		name = value.Name
+	case *ast.SelectorExpr:
+		identifier, ok := value.X.(*ast.Ident)
+		if !ok {
+			return function{}, nil, false
+		}
+		importPath := fn.imports[identifier.Name]
+		var local bool
+		packageID, local = x.localPackageID(importPath)
+		if !local {
+			return function{}, nil, false
+		}
+		name = value.Sel.Name
+	default:
+		return function{}, nil, false
+	}
+	for _, candidate := range x.functions {
+		if candidate.packageID != packageID {
+			continue
+		}
+		for _, declaration := range candidate.file.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || general.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range general.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if ok && typeSpec.Name.Name == name {
+					return candidate, typeSpec.Type, true
+				}
+			}
+		}
+	}
+	return function{}, nil, false
 }
 
 func containingStatements(node ast.Node, position token.Pos) []ast.Stmt {
@@ -842,25 +918,32 @@ func (x *indexer) connect() {
 			x.connectDataflow(fn, call)
 			name := strings.ToUpper(callName)
 			handlerID := ""
-			inlineHandler := false
+			handlerEvidence := false
 			start, stop, step := len(call.Args)-1, -1, -1
 			if x.isEchoRegistration(fn, call) {
-				start, stop, step = 0, len(call.Args), 1
+				for index, argument := range call.Args {
+					if strings.HasPrefix(literalString(argument), "/") && index+1 < len(call.Args) {
+						start, stop, step = index+1, index+2, 1
+						handlerEvidence = true
+						break
+					}
+				}
 			}
 			for index := start; index != stop; index += step {
 				if _, ok := call.Args[index].(*ast.FuncLit); ok {
-					inlineHandler = true
+					handlerEvidence = true
 					break
 				}
 				candidate, _ := x.resolveTarget(fn, call.Args[index])
 				if kind := x.nodes[candidate].Kind; kind == "function" || kind == "method" {
 					handlerID = candidate
+					handlerEvidence = true
 					break
 				}
 			}
 			handleRegistration := strings.Contains(name, "HANDLEFUNC")
 			verbRegistration := x.isVerbRegistration(fn, call)
-			if handleRegistration || verbRegistration && (handlerID != "" || inlineHandler) {
+			if handleRegistration || verbRegistration && handlerEvidence {
 				path := ""
 				for _, arg := range call.Args {
 					if value := literalString(arg); strings.HasPrefix(value, "/") {
@@ -869,6 +952,7 @@ func (x *indexer) connect() {
 					}
 				}
 				if path != "" {
+					path = joinRoutePath(x.routePrefix(fn, call), path)
 					method := "HTTP"
 					for _, candidate := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
 						if strings.Contains(name, candidate) {
@@ -887,6 +971,44 @@ func (x *indexer) connect() {
 			return true
 		})
 	}
+}
+
+func (x *indexer) routePrefix(fn function, call *ast.CallExpr) string {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	return x.groupPrefix(fn, selector.X)
+}
+
+func (x *indexer) groupPrefix(fn function, expression ast.Expr) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+			return x.groupPrefix(fn, bound)
+		}
+	case *ast.CallExpr:
+		selector, ok := value.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "Group" {
+			return ""
+		}
+		prefix := x.groupPrefix(fn, selector.X)
+		for _, argument := range value.Args {
+			if segment := literalString(argument); strings.HasPrefix(segment, "/") {
+				return joinRoutePath(prefix, segment)
+			}
+		}
+	case *ast.ParenExpr:
+		return x.groupPrefix(fn, value.X)
+	}
+	return ""
+}
+
+func joinRoutePath(prefix, route string) string {
+	if prefix == "" {
+		return route
+	}
+	return "/" + strings.Trim(prefix, "/") + "/" + strings.TrimPrefix(route, "/")
 }
 
 func (x *indexer) isEchoRegistration(fn function, call *ast.CallExpr) bool {

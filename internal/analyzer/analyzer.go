@@ -657,7 +657,7 @@ func (x *indexer) receiverPackageName(fn function, expression ast.Expr) string {
 				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
 					continue
 				}
-				return x.receiverPackageNameWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value.Fun))
+				return x.receiverPackageNameWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value.Fun, nil))
 			}
 		}
 	}
@@ -720,14 +720,14 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 				if candidate.node.ID != id || candidate.decl.Type.Results == nil || len(candidate.decl.Type.Results.List) == 0 {
 					continue
 				}
-				return x.receiverReferenceWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value.Fun))
+				return x.receiverReferenceWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, callTypeArguments(fn, candidate, value.Fun, nil))
 			}
 		}
 	}
 	return "", ""
 }
 
-func callTypeArguments(caller, callee function, expression ast.Expr) map[string]typeArgument {
+func callTypeArguments(caller, callee function, expression ast.Expr, inherited map[string]typeArgument) map[string]typeArgument {
 	var arguments []ast.Expr
 	switch value := expression.(type) {
 	case *ast.IndexExpr:
@@ -735,19 +735,19 @@ func callTypeArguments(caller, callee function, expression ast.Expr) map[string]
 	case *ast.IndexListExpr:
 		arguments = value.Indices
 	default:
-		return nil
+		return inherited
 	}
 	if callee.decl.Type.TypeParams == nil {
-		return nil
+		return inherited
 	}
 	types := map[string]typeArgument{}
 	index := 0
 	for _, field := range callee.decl.Type.TypeParams.List {
 		for _, name := range field.Names {
 			if index >= len(arguments) {
-				return nil
+				return inherited
 			}
-			types[name.Name] = typeArgument{fn: caller, expression: arguments[index]}
+			types[name.Name] = typeArgument{fn: caller, expression: arguments[index], types: inherited}
 			index++
 		}
 	}
@@ -1009,7 +1009,7 @@ func (x *indexer) iterableReceiverWithTypes(fn function, expression ast.Expr, ke
 		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
 			for _, candidate := range x.functions {
 				if candidate.node.ID == id && candidate.decl.Type.Results != nil && len(candidate.decl.Type.Results.List) > 0 {
-					return x.iterableReceiverWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, key, types)
+					return x.iterableReceiverWithTypes(candidate, candidate.decl.Type.Results.List[0].Type, key, callTypeArguments(fn, candidate, value.Fun, types))
 				}
 			}
 		}

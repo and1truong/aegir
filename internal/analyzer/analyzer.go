@@ -639,6 +639,7 @@ func (x *indexer) hasReceiverType(packageID, name string) bool {
 }
 
 func boundExpression(fn function, name string, before token.Pos) ast.Expr {
+	var fallback ast.Expr
 	for _, fields := range []*ast.FieldList{fn.decl.Recv, fn.decl.Type.Params} {
 		if fields == nil {
 			continue
@@ -646,40 +647,106 @@ func boundExpression(fn function, name string, before token.Pos) ast.Expr {
 		for _, field := range fields.List {
 			for _, candidate := range field.Names {
 				if candidate.Name == name {
-					return field.Type
+					fallback = field.Type
 				}
 			}
 		}
 	}
+	if result := bindingInBlock(fn.decl.Body, name, before); result != nil {
+		return result
+	}
+	return fallback
+}
+
+func bindingInBlock(block *ast.BlockStmt, name string, before token.Pos) ast.Expr {
+	if block == nil {
+		return nil
+	}
 	var result ast.Expr
-	var resultPosition token.Pos
-	ast.Inspect(fn.decl.Body, func(node ast.Node) bool {
-		if _, nested := node.(*ast.FuncLit); nested {
+	for _, statement := range block.List {
+		if statement.Pos() >= before {
+			break
+		}
+		if statement.End() < before {
+			if binding := bindingFromStatement(statement, name); binding != nil {
+				result = binding
+			}
+			continue
+		}
+		if binding := bindingFromScopedHeader(statement, name); binding != nil {
+			result = binding
+		}
+		if nested := containingBlock(statement, before); nested != nil {
+			if binding := bindingInBlock(nested, name, before); binding != nil {
+				return binding
+			}
+		}
+		break
+	}
+	return result
+}
+
+func bindingFromStatement(statement ast.Stmt, name string) ast.Expr {
+	switch declaration := statement.(type) {
+	case *ast.DeclStmt:
+		general, ok := declaration.Decl.(*ast.GenDecl)
+		if !ok {
+			return nil
+		}
+		for _, spec := range general.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for index, candidate := range value.Names {
+				if candidate.Name != name {
+					continue
+				}
+				if value.Type != nil {
+					return value.Type
+				}
+				if index < len(value.Values) {
+					return value.Values[index]
+				}
+			}
+		}
+	case *ast.AssignStmt:
+		for index, left := range declaration.Lhs {
+			candidate, ok := left.(*ast.Ident)
+			if ok && candidate.Name == name && index < len(declaration.Rhs) {
+				return declaration.Rhs[index]
+			}
+		}
+	}
+	return nil
+}
+
+func bindingFromScopedHeader(statement ast.Stmt, name string) ast.Expr {
+	var initializer ast.Stmt
+	switch value := statement.(type) {
+	case *ast.IfStmt:
+		initializer = value.Init
+	case *ast.ForStmt:
+		initializer = value.Init
+	case *ast.SwitchStmt:
+		initializer = value.Init
+	case *ast.TypeSwitchStmt:
+		if binding := bindingFromStatement(value.Assign, name); binding != nil {
+			return binding
+		}
+		initializer = value.Init
+	}
+	return bindingFromStatement(initializer, name)
+}
+
+func containingBlock(node ast.Node, position token.Pos) *ast.BlockStmt {
+	var result *ast.BlockStmt
+	ast.Inspect(node, func(candidate ast.Node) bool {
+		if candidate == nil || candidate.Pos() > position || candidate.End() < position {
 			return false
 		}
-		if node == nil || node.Pos() >= before {
-			return node == nil
-		}
-		switch declaration := node.(type) {
-		case *ast.ValueSpec:
-			for index, candidate := range declaration.Names {
-				if candidate.Name != name || declaration.Pos() < resultPosition {
-					continue
-				}
-				if declaration.Type != nil {
-					result, resultPosition = declaration.Type, declaration.Pos()
-				} else if index < len(declaration.Values) {
-					result, resultPosition = declaration.Values[index], declaration.Pos()
-				}
-			}
-		case *ast.AssignStmt:
-			for index, left := range declaration.Lhs {
-				candidate, ok := left.(*ast.Ident)
-				if !ok || candidate.Name != name || index >= len(declaration.Rhs) || declaration.Pos() < resultPosition {
-					continue
-				}
-				result, resultPosition = declaration.Rhs[index], declaration.Pos()
-			}
+		if block, ok := candidate.(*ast.BlockStmt); ok {
+			result = block
 		}
 		return true
 	})
@@ -707,7 +774,12 @@ func (x *indexer) connect() {
 			x.connectDataflow(fn, call)
 			name := strings.ToUpper(callName)
 			handlerID := ""
+			inlineHandler := false
 			for index := len(call.Args) - 1; index >= 0; index-- {
+				if _, ok := call.Args[index].(*ast.FuncLit); ok {
+					inlineHandler = true
+					continue
+				}
 				candidate, _ := x.resolveTarget(fn, call.Args[index])
 				if kind := x.nodes[candidate].Kind; kind == "function" || kind == "method" {
 					handlerID = candidate
@@ -715,8 +787,8 @@ func (x *indexer) connect() {
 				}
 			}
 			handleRegistration := strings.Contains(name, "HANDLEFUNC")
-			verbRegistration := name == "GET" || name == "POST" || name == "PUT" || name == "PATCH" || name == "DELETE" || strings.HasSuffix(name, ".GET") || strings.HasSuffix(name, ".POST") || strings.HasSuffix(name, ".PUT") || strings.HasSuffix(name, ".PATCH") || strings.HasSuffix(name, ".DELETE")
-			if handleRegistration || verbRegistration && handlerID != "" {
+			verbRegistration := x.isVerbRegistration(fn, call)
+			if handleRegistration || verbRegistration && (handlerID != "" || inlineHandler) {
 				path := ""
 				for _, arg := range call.Args {
 					if value := literalString(arg); strings.HasPrefix(value, "/") {
@@ -743,6 +815,33 @@ func (x *indexer) connect() {
 			return true
 		})
 	}
+}
+
+func (x *indexer) isVerbRegistration(fn function, call *ast.CallExpr) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	method := selector.Sel.Name
+	switch strings.ToUpper(method) {
+	case "GET", "POST", "PUT", "PATCH", "DELETE":
+	default:
+		return false
+	}
+	_, receiverType := x.receiverReference(fn, selector.X)
+	return routeReceiverName(receiverType) || routeReceiverName(expressionName(selector.X))
+}
+
+func routeReceiverName(name string) bool {
+	name = strings.ToLower(name)
+	if index := strings.LastIndex(name, "."); index >= 0 {
+		name = name[index+1:]
+	}
+	switch name {
+	case "r", "e", "router", "routes", "route", "mux", "engine", "group", "app", "api", "server":
+		return true
+	}
+	return strings.Contains(name, "router") || strings.Contains(name, "route") || strings.Contains(name, "mux")
 }
 
 var sqlTablePattern = regexp.MustCompile(`(?i)\b(FROM|JOIN|INTO|UPDATE)\s+([a-zA-Z_][a-zA-Z0-9_.]*)`)

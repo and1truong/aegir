@@ -227,7 +227,7 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 		".git/HEAD":          "0123456789abcdef\n",
 		"go.mod":             "module example.com/routes\n\ngo 1.24\n",
 		"orders/handler.go":  "package orders\ntype AdminHandler struct{}\ntype PublicHandler struct{}\nfunc (h *AdminHandler) Handle() {}\nfunc (h *PublicHandler) Handle() {}\nfunc NewHandler() *PublicHandler { return &PublicHandler{} }\n",
-		"routes/register.go": "package routes\nimport \"example.com/routes/orders\"\ntype Router struct{}\ntype Cache struct{}\nfunc (Router) GET(string, any) {}\nfunc (Cache) Get(string) {}\nfunc Register(router Router, cache Cache, h *orders.PublicHandler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.PublicHandler).Handle); fromConstructor := orders.NewHandler(); router.GET(\"/constructor\", fromConstructor.Handle); literal := &orders.PublicHandler{}; router.GET(\"/literal\", literal.Handle); cache.Get(\"/config\") }\n",
+		"routes/register.go": "package routes\nimport \"example.com/routes/orders\"\ntype Router struct{}\ntype Cache struct{}\nfunc (Router) GET(string, any) {}\nfunc (Cache) GET(string, any) {}\nfunc onMiss() {}\nfunc Register(router Router, cache Cache, h *orders.PublicHandler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.PublicHandler).Handle); fromConstructor := orders.NewHandler(); router.GET(\"/constructor\", fromConstructor.Handle); literal := &orders.PublicHandler{}; router.GET(\"/literal\", literal.Handle); { h := &orders.AdminHandler{}; router.GET(\"/admin\", h.Handle) }; router.GET(\"/health\", func() {}); cache.GET(\"/config\", onMiss) }\n",
 	} {
 		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -241,22 +241,39 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpointIDs, handlerID := map[string]bool{}, ""
+	endpointIDs := map[string]string{}
+	handlerIDs := map[string]string{}
 	for _, node := range snapshot.Nodes {
 		if node.Kind == "endpoint" {
-			endpointIDs[node.ID] = true
+			endpointIDs[node.Label] = node.ID
 		}
-		if node.Kind == "method" && node.Label == "PublicHandler.Handle" {
-			handlerID = node.ID
+		if node.Kind == "method" || node.Kind == "function" {
+			handlerIDs[node.Label] = node.ID
 		}
 	}
-	connected := 0
+	connections := map[string]string{}
 	for _, edge := range snapshot.Edges {
-		if endpointIDs[edge.Source] && edge.Label == "handler" && edge.Target == handlerID {
-			connected++
+		if edge.Label != "handler" {
+			continue
+		}
+		for label, endpointID := range endpointIDs {
+			if edge.Source == endpointID {
+				connections[label] = edge.Target
+			}
 		}
 	}
-	if len(endpointIDs) != 4 || connected != 4 {
-		t.Fatalf("endpoints %v were not connected to injected callback %q: %#v", endpointIDs, handlerID, snapshot.Edges)
+	for _, label := range []string{"GET /orders", "GET /method-expression", "GET /constructor", "GET /literal"} {
+		if connections[label] != handlerIDs["PublicHandler.Handle"] {
+			t.Fatalf("endpoint %q was not connected to PublicHandler.Handle: %#v", label, snapshot.Edges)
+		}
+	}
+	if connections["GET /admin"] != handlerIDs["AdminHandler.Handle"] {
+		t.Fatalf("shadowed receiver was not connected to AdminHandler.Handle: %#v", snapshot.Edges)
+	}
+	if connections["GET /health"] != handlerIDs["Register"] {
+		t.Fatalf("inline callback did not fall back to Register: %#v", snapshot.Edges)
+	}
+	if len(endpointIDs) != 6 || endpointIDs["GET /config"] != "" {
+		t.Fatalf("unexpected endpoint set: %#v", endpointIDs)
 	}
 }

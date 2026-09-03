@@ -598,9 +598,9 @@ func (x *indexer) resolveTarget(fn function, expression ast.Expr) (string, strin
 			}
 		}
 		if packageID, receiverType := x.receiverReference(fn, target.X); packageID != "" && receiverType != "" {
-			packageName := x.primaryPackageName(packageID)
-			if packageID == fn.packageID {
-				packageName = fn.packageName
+			packageName := x.receiverPackageName(fn, target.X)
+			if packageName == "" {
+				packageName = x.primaryPackageName(packageID)
 			}
 			if id := x.functionID(packageID, packageName, receiverType+"."+target.Sel.Name); id != "" {
 				return id, target.Sel.Name
@@ -609,6 +609,46 @@ func (x *indexer) resolveTarget(fn function, expression ast.Expr) (string, strin
 		return "", target.Sel.Name
 	}
 	return "", ""
+}
+
+func (x *indexer) receiverPackageName(fn function, expression ast.Expr) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if importPath := fn.imports[value.Name]; importPath != "" {
+			if packageID, local := x.localPackageID(importPath); local {
+				return x.primaryPackageName(packageID)
+			}
+			return ""
+		}
+		if value.Pos() != token.NoPos {
+			if bound := boundExpression(x, fn, value.Name, value.Pos()); bound != nil {
+				return x.receiverPackageName(fn, bound)
+			}
+		}
+		if packageFn, bound, ok := x.packageValueExpression(fn, value.Name); ok {
+			return x.receiverPackageName(packageFn, bound)
+		}
+		if x.hasReceiverType(fn, value.Name) {
+			return fn.packageName
+		}
+	case *ast.SelectorExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.StarExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.ParenExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.IndexExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.IndexListExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.UnaryExpr:
+		return x.receiverPackageName(fn, value.X)
+	case *ast.ChanType:
+		return x.receiverPackageName(fn, value.Value)
+	case *ast.CompositeLit:
+		return x.receiverPackageName(fn, value.Type)
+	}
+	return ""
 }
 
 func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, string) {

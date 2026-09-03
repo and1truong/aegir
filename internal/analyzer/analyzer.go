@@ -569,12 +569,94 @@ func (x *indexer) resolveTarget(fn function, expression ast.Expr) (string, strin
 				return stableID("package", importPath), importPath + "." + target.Sel.Name
 			}
 		}
+		if packageID := x.receiverPackage(fn, target.X); packageID != "" {
+			if id := x.byPackage[packageID][target.Sel.Name]; id != "" {
+				return id, target.Sel.Name
+			}
+		}
 		if id := x.byPackage[fn.packageID][target.Sel.Name]; id != "" {
 			return id, target.Sel.Name
 		}
 		return "", target.Sel.Name
 	}
 	return "", ""
+}
+
+func (x *indexer) receiverPackage(fn function, expression ast.Expr) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if importPath := fn.imports[value.Name]; importPath != "" {
+			if packageID, local := x.localPackageID(importPath); local {
+				return packageID
+			}
+			return ""
+		}
+		if bound := boundType(fn, value.Name); bound != nil {
+			return x.receiverPackage(fn, bound)
+		}
+		return fn.packageID
+	case *ast.SelectorExpr:
+		return x.receiverPackage(fn, value.X)
+	case *ast.StarExpr:
+		return x.receiverPackage(fn, value.X)
+	case *ast.ParenExpr:
+		return x.receiverPackage(fn, value.X)
+	case *ast.IndexExpr:
+		return x.receiverPackage(fn, value.X)
+	case *ast.IndexListExpr:
+		return x.receiverPackage(fn, value.X)
+	case *ast.UnaryExpr:
+		return x.receiverPackage(fn, value.X)
+	case *ast.CompositeLit:
+		return x.receiverPackage(fn, value.Type)
+	case *ast.CallExpr:
+		if id, _ := x.resolveTarget(fn, value.Fun); id != "" {
+			node := x.nodes[id]
+			if node.Package != "" {
+				return node.Package
+			}
+			if node.Kind == "package" {
+				return node.ID
+			}
+		}
+	}
+	return ""
+}
+
+func boundType(fn function, name string) ast.Expr {
+	for _, fields := range []*ast.FieldList{fn.decl.Recv, fn.decl.Type.Params} {
+		if fields == nil {
+			continue
+		}
+		for _, field := range fields.List {
+			for _, candidate := range field.Names {
+				if candidate.Name == name {
+					return field.Type
+				}
+			}
+		}
+	}
+	var result ast.Expr
+	ast.Inspect(fn.decl.Body, func(node ast.Node) bool {
+		if result != nil {
+			return false
+		}
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
+		declaration, ok := node.(*ast.ValueSpec)
+		if !ok || declaration.Type == nil {
+			return true
+		}
+		for _, candidate := range declaration.Names {
+			if candidate.Name == name {
+				result = declaration.Type
+				return false
+			}
+		}
+		return true
+	})
+	return result
 }
 
 func (x *indexer) connect() {
@@ -597,7 +679,7 @@ func (x *indexer) connect() {
 			}
 			x.connectDataflow(fn, call)
 			name := strings.ToUpper(callName)
-			if strings.Contains(name, "HANDLEFUNC") || strings.HasSuffix(name, ".GET") || strings.HasSuffix(name, ".POST") || strings.HasSuffix(name, ".PUT") || strings.HasSuffix(name, ".DELETE") {
+			if strings.Contains(name, "HANDLEFUNC") || name == "GET" || name == "POST" || name == "PUT" || name == "PATCH" || name == "DELETE" || strings.HasSuffix(name, ".GET") || strings.HasSuffix(name, ".POST") || strings.HasSuffix(name, ".PUT") || strings.HasSuffix(name, ".PATCH") || strings.HasSuffix(name, ".DELETE") {
 				path := ""
 				for _, arg := range call.Args {
 					if value := literalString(arg); strings.HasPrefix(value, "/") {

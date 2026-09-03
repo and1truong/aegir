@@ -220,3 +220,43 @@ func TestRunConnectsEndpointToRegisteredCallback(t *testing.T) {
 	}
 	t.Fatalf("endpoint %q was not connected to callback %q: %#v", endpointID, handlerID, snapshot.Edges)
 }
+
+func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		".git/HEAD":          "0123456789abcdef\n",
+		"go.mod":             "module example.com/routes\n\ngo 1.24\n",
+		"orders/handler.go":  "package orders\ntype Handler struct{}\nfunc (h *Handler) Handle() {}\n",
+		"routes/register.go": "package routes\nimport \"example.com/routes/orders\"\ntype Router struct{}\nfunc (Router) GET(string, any) {}\nfunc Register(router Router, h *orders.Handler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.Handler).Handle) }\n",
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := Run(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpointIDs, handlerID := map[string]bool{}, ""
+	for _, node := range snapshot.Nodes {
+		if node.Kind == "endpoint" && (node.Label == "GET /orders" || node.Label == "GET /method-expression") {
+			endpointIDs[node.ID] = true
+		}
+		if node.Kind == "method" && node.Label == "Handler.Handle" {
+			handlerID = node.ID
+		}
+	}
+	connected := 0
+	for _, edge := range snapshot.Edges {
+		if endpointIDs[edge.Source] && edge.Label == "handler" && edge.Target == handlerID {
+			connected++
+		}
+	}
+	if len(endpointIDs) != 2 || connected != 2 {
+		t.Fatalf("endpoints %v were not connected to injected callback %q: %#v", endpointIDs, handlerID, snapshot.Edges)
+	}
+}

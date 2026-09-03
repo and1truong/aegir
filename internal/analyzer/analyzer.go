@@ -583,6 +583,10 @@ func (x *indexer) resolveCall(fn function, call *ast.CallExpr) (string, string) 
 
 func (x *indexer) resolveTarget(fn function, expression ast.Expr) (string, string) {
 	switch target := expression.(type) {
+	case *ast.IndexExpr:
+		return x.resolveTarget(fn, target.X)
+	case *ast.IndexListExpr:
+		return x.resolveTarget(fn, target.X)
 	case *ast.Ident:
 		return x.functionID(fn.packageID, fn.packageName, target.Name), target.Name
 	case *ast.SelectorExpr:

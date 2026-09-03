@@ -8,7 +8,7 @@ The initial architectural unit is a non-external Go package. Package identity is
 
 All scores are deterministic integers from 0–100. Raw factors are normalized against the repository cohort using a bounded, log-scaled p95 reference. A dimension is the weighted mean of available factors; unavailable factors are omitted from the denominator and reported through `coverage`. Zero is an observed value, never a substitute for missing data.
 
-The versioned `attention-v1.1` model uses:
+The versioned `attention-v1.17` model uses:
 
 - Impact / Criticality: direct dependents (20%), transitive dependent reach (15%), dependency brokerage (15%), shared state/event reach (10%), cross-team dependents (10%), owned contracts (10%), runtime traffic (10%), and business criticality (10%). Runtime, ownership and business factors remain explicitly unavailable when no source exists.
 - Change Complexity: fan-out (15%), technical boundary variety (15%), cross-team dependencies (10%), stateful relationships (15%), async relationships (15%), cycles (15%), contract coupling (10%), and p90 indexed symbol complexity (5%).

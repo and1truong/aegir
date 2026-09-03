@@ -43,6 +43,10 @@ Each semantic branch initially shows at most eight nodes. Additional nodes are r
 
 The deterministic score contract, cache behavior and calibration process are documented in [docs/ATTENTION_MODEL.md](docs/ATTENTION_MODEL.md).
 
+## Releases
+
+GitHub Releases provide prebuilt archives for macOS, Linux, and Windows. Each archive includes the server binaries and the built frontend under `web/dist`. The maintainer process, CI gates, checksum verification, and local release dry run are documented in [docs/RELEASING.md](docs/RELEASING.md).
+
 Runtime facts can be imported in Settings from a JSON array. Identify each node with `nodeId`, or with a unique `label` and optional repository-relative `file`. Every record requires `source` and `window` plus at least one measured metric:
 
 ```json

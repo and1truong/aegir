@@ -11,13 +11,20 @@ import (
 	"github.com/and1truong/aegir/internal/store"
 )
 
+var version = "dev"
+
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+		fmt.Println(version)
+		return
+	}
+
 	serve := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := serve.String("addr", "127.0.0.1:4123", "HTTP listen address")
 	stateDir := serve.String("state-dir", ".aegir", "directory for persistent local state")
 	webDir := serve.String("web-dir", "web/dist", "built frontend directory")
 	if len(os.Args) < 2 || os.Args[1] != "serve" {
-		fmt.Fprintln(os.Stderr, "usage: aegir serve [--addr 127.0.0.1:4123] [--state-dir .aegir] [--web-dir web/dist]")
+		fmt.Fprintln(os.Stderr, "usage: aegir <serve|version>\n\n  aegir serve [--addr 127.0.0.1:4123] [--state-dir .aegir] [--web-dir web/dist]\n  aegir version")
 		os.Exit(2)
 	}
 	_ = serve.Parse(os.Args[2:])

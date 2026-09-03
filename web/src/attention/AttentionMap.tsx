@@ -1,7 +1,7 @@
 import { Minus, Plus, RotateCcw } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import type { AttentionLandscape, AttentionUnit } from './types';
-import { bubblePaintOrder, bubbleRadius, clamp, jitteredScore, scaleCanvasPoint, stableJitter, tooltipPosition, zoomedScore } from './geometry';
+import { bubblePaintOrder, bubbleRadius, clamp, jitteredScore, scaleCanvasPoint, stableJitter, tooltipPosition, zoomAfterWheel, zoomedScore } from './geometry';
 
 const regionColor: Record<AttentionUnit['region'], string> = {
   investigate: '#fb7185',
@@ -22,8 +22,10 @@ interface AttentionMapProps {
 
 export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touchedUnitIds, compact = false }: AttentionMapProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const tooltip = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 900, height: compact ? 280 : 500 });
   const [renderedSize, setRenderedSize] = useState(size);
+  const [tooltipSize, setTooltipSize] = useState({ width: 224, height: 64 });
   const [zoom, setZoom] = useState(1);
   const [hovered, setHovered] = useState<{ unit: AttentionUnit; x: number; y: number }>();
   const points = useMemo(() => {
@@ -58,6 +60,12 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useLayoutEffect(() => {
+    if (!tooltip.current) return;
+    const bounds = tooltip.current.getBoundingClientRect();
+    setTooltipSize({ width: bounds.width, height: bounds.height });
+  }, [hovered?.unit.unit.id]);
 
   useEffect(() => {
     const element = canvas.current;
@@ -112,8 +120,8 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
     return { x, y, point: [...paintedPoints].reverse().find((item) => Math.hypot(item.x - logical.x, item.y - logical.y) <= item.radius + 5) };
   };
   return <div className={`relative flex-1 overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/50 ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`}>
-    <canvas ref={canvas} className={`h-full w-full ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`} aria-label={`Attention Map with ${units.length} package bubbles`} onWheel={(event) => { event.preventDefault(); setZoom((value) => clamp(value + (event.deltaY < 0 ? .25 : -.25), 1, 3)) }} onPointerMove={(event) => { const hit = findPoint(event); setHovered(hit.point ? { unit: hit.point.unit, x: hit.x, y: hit.y } : undefined) }} onPointerLeave={() => setHovered(undefined)} onClick={(event) => { const hit = findPoint(event); if (hit.point) onOpen(hit.point.unit.unit.id) }} />
+    <canvas ref={canvas} className={`h-full w-full ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`} aria-label={`Attention Map with ${units.length} package bubbles`} onWheel={(event) => { const next = zoomAfterWheel(zoom, event.deltaY); if (next === zoom) return; event.preventDefault(); setZoom(next) }} onPointerMove={(event) => { const hit = findPoint(event); setHovered(hit.point ? { unit: hit.point.unit, x: hit.x, y: hit.y } : undefined) }} onPointerLeave={() => setHovered(undefined)} onClick={(event) => { const hit = findPoint(event); if (hit.point) onOpen(hit.point.unit.unit.id) }} />
     <div className="absolute right-2 top-2 flex rounded border border-zinc-700 bg-zinc-950/90" aria-label="Attention Map zoom controls"><button type="button" onClick={() => setZoom((value) => clamp(value - .25, 1, 3))} disabled={zoom === 1} aria-label="Zoom out" className="p-1.5 text-zinc-400 disabled:opacity-30"><Minus className="h-3 w-3" /></button><button type="button" onClick={() => setZoom(1)} aria-label="Reset zoom" title={`${Math.round(zoom * 100)}%`} className="border-x border-zinc-700 p-1.5 text-zinc-400"><RotateCcw className="h-3 w-3" /></button><button type="button" onClick={() => setZoom((value) => clamp(value + .25, 1, 3))} disabled={zoom === 3} aria-label="Zoom in" className="p-1.5 text-zinc-400 disabled:opacity-30"><Plus className="h-3 w-3" /></button></div>
-    {hovered && <div className="pointer-events-none absolute z-10 w-56 rounded-md border border-zinc-700 bg-zinc-950/95 p-2 shadow-xl" style={tooltipPosition(hovered.x, hovered.y, renderedSize.width, renderedSize.height)}><div className="font-mono text-[11px] text-zinc-100">{hovered.unit.unit.label}</div><div className="mt-1 grid grid-cols-3 gap-1 font-mono text-[9px] text-zinc-400"><span>Impact {hovered.unit.impact.score ?? '—'}</span><span>Complex {hovered.unit.changeComplexity.score ?? '—'}</span><span>Velocity {hovered.unit.changeVelocity.score ?? '—'}</span></div><div className="mt-1 text-[9px] text-zinc-500">Click to explain in graph</div></div>}
+    {hovered && <div ref={tooltip} className="pointer-events-none absolute z-10 w-56 rounded-md border border-zinc-700 bg-zinc-950/95 p-2 shadow-xl" style={tooltipPosition(hovered.x, hovered.y, renderedSize.width, renderedSize.height, tooltipSize.width, tooltipSize.height)}><div className="font-mono text-[11px] text-zinc-100">{hovered.unit.unit.label}</div><div className="mt-1 grid grid-cols-3 gap-1 font-mono text-[9px] text-zinc-400"><span>Impact {hovered.unit.impact.score ?? '—'}</span><span>Complex {hovered.unit.changeComplexity.score ?? '—'}</span><span>Velocity {hovered.unit.changeVelocity.score ?? '—'}</span></div><div className="mt-1 text-[9px] text-zinc-500">Click to explain in graph</div></div>}
   </div>;
 }

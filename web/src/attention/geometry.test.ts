@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bubblePaintOrder, bubbleRadius, jitteredScore, scaleCanvasPoint, stableJitter, tooltipPosition, zoomedScore } from './geometry.ts';
+import { bubblePaintOrder, bubbleRadius, jitteredScore, scaleCanvasPoint, stableJitter, tooltipPosition, zoomAfterWheel, zoomedScore } from './geometry.ts';
 import type { AttentionUnit } from './types.ts';
 
 function unit(velocity?: number, id = 'package:a'): AttentionUnit {
@@ -36,6 +36,13 @@ test('pointer coordinates scale into the logical canvas size', () => {
 });
 
 test('tooltip position stays inside rendered map bounds', () => {
-  assert.deepEqual(tooltipPosition(290, 290, 300, 300), { left: 68, top: 228 });
-  assert.deepEqual(tooltipPosition(0, 0, 300, 300), { left: 12, top: 8 });
+  assert.deepEqual(tooltipPosition(290, 290, 300, 300, 224, 96), { left: 68, top: 196 });
+  assert.deepEqual(tooltipPosition(0, 0, 300, 300, 224, 96), { left: 12, top: 8 });
+});
+
+test('wheel zoom changes only away from its directional boundary', () => {
+  assert.equal(zoomAfterWheel(1, 10), 1);
+  assert.equal(zoomAfterWheel(3, -10), 3);
+  assert.equal(zoomAfterWheel(1, -10), 1.25);
+  assert.equal(zoomAfterWheel(3, 10), 2.75);
 });

@@ -35,6 +35,11 @@ export function scaleCanvasPoint(x: number, y: number, cssWidth: number, cssHeig
   return { x: x * logicalWidth / Math.max(1, cssWidth), y: y * logicalHeight / Math.max(1, cssHeight) };
 }
 
-export function tooltipPosition(x: number, y: number, width: number, height: number) {
-  return { left: clamp(x + 12, 8, Math.max(8, width - 232)), top: clamp(y - 35, 8, Math.max(8, height - 72)) };
+export function tooltipPosition(x: number, y: number, width: number, height: number, tooltipWidth: number, tooltipHeight: number) {
+  return { left: clamp(x + 12, 8, Math.max(8, width - tooltipWidth - 8)), top: clamp(y - 35, 8, Math.max(8, height - tooltipHeight - 8)) };
+}
+
+export function zoomAfterWheel(zoom: number, deltaY: number) {
+  if (deltaY === 0) return zoom;
+  return clamp(zoom + (deltaY < 0 ? .25 : -.25), 1, 3);
 }

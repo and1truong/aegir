@@ -30,3 +30,7 @@ export function jitteredScore(value: number | null, threshold: number, zoom: num
 export function bubblePaintOrder<T extends { unit: AttentionUnit }>(points: readonly T[]) {
   return [...points].sort((left, right) => bubbleRadius(right.unit) - bubbleRadius(left.unit) || left.unit.unit.id.localeCompare(right.unit.unit.id));
 }
+
+export function scaleCanvasPoint(x: number, y: number, cssWidth: number, cssHeight: number, logicalWidth: number, logicalHeight: number) {
+  return { x: x * logicalWidth / Math.max(1, cssWidth), y: y * logicalHeight / Math.max(1, cssHeight) };
+}

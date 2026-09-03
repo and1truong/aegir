@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bubblePaintOrder, bubbleRadius, jitteredScore, stableJitter, zoomedScore } from './geometry.ts';
+import { bubblePaintOrder, bubbleRadius, jitteredScore, scaleCanvasPoint, stableJitter, zoomedScore } from './geometry.ts';
 import type { AttentionUnit } from './types.ts';
 
 function unit(velocity?: number, id = 'package:a'): AttentionUnit {
@@ -29,4 +29,8 @@ test('jitter stays on the classified side of policy thresholds', () => {
 test('paint order draws smaller bubbles last for topmost hit testing', () => {
   const points = [{ unit: unit(0, 'small') }, { unit: unit(100, 'large') }];
   assert.deepEqual(bubblePaintOrder(points).map((point) => point.unit.unit.id), ['large', 'small']);
+});
+
+test('pointer coordinates scale into the logical canvas size', () => {
+  assert.deepEqual(scaleCanvasPoint(100, 75, 200, 150, 400, 300), { x: 200, y: 150 });
 });

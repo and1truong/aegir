@@ -1,7 +1,7 @@
 import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import type { AttentionLandscape, AttentionUnit } from './types';
-import { bubblePaintOrder, bubbleRadius, clamp, jitteredScore, stableJitter, zoomedScore } from './geometry';
+import { bubblePaintOrder, bubbleRadius, clamp, jitteredScore, scaleCanvasPoint, stableJitter, zoomedScore } from './geometry';
 
 const regionColor: Record<AttentionUnit['region'], string> = {
   investigate: '#fb7185',
@@ -104,7 +104,8 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
 
   const findPoint = (event: MouseEvent<HTMLCanvasElement> | PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect(); const x = event.clientX - rect.left, y = event.clientY - rect.top;
-    return { x, y, point: [...paintedPoints].reverse().find((item) => Math.hypot(item.x - x, item.y - y) <= item.radius + 5) };
+    const logical = scaleCanvasPoint(x, y, rect.width, rect.height, size.width, size.height);
+    return { x, y, point: [...paintedPoints].reverse().find((item) => Math.hypot(item.x - logical.x, item.y - logical.y) <= item.radius + 5) };
   };
   return <div className={`relative flex-1 overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/50 ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`}>
     <canvas ref={canvas} className={`h-full w-full ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`} aria-label={`Attention Map with ${units.length} package bubbles`} onWheel={(event) => { event.preventDefault(); setZoom((value) => clamp(value + (event.deltaY < 0 ? .25 : -.25), 1, 3)) }} onPointerMove={(event) => { const hit = findPoint(event); setHovered(hit.point ? { unit: hit.point.unit, x: hit.x, y: hit.y } : undefined) }} onPointerLeave={() => setHovered(undefined)} onClick={(event) => { const hit = findPoint(event); if (hit.point) onOpen(hit.point.unit.unit.id) }} />

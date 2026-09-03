@@ -28,3 +28,17 @@ func TestForReviewRanksTouchedPackagesAgainstBaseline(t *testing.T) {
 		t.Fatalf("expected highest-risk touched package first: %#v", result.Units)
 	}
 }
+
+func TestForReviewAttributesEndpointDeltaToHandlerPackage(t *testing.T) {
+	pkg := analyzer.Node{ID: "pkg:orders", Kind: "package", Label: "orders"}
+	handler := analyzer.Node{ID: "fn:handler", Kind: "function", Package: pkg.ID}
+	endpoint := analyzer.Node{ID: "endpoint:orders", Kind: "endpoint", Label: "POST /orders"}
+	edge := analyzer.Edge{ID: "endpoint-handler", Source: endpoint.ID, Target: handler.ID, Kind: "calls", Label: "handler"}
+	snapshot := analyzer.Snapshot{Nodes: []analyzer.Node{pkg, handler, endpoint}, Edges: []analyzer.Edge{edge}}
+	landscape := Landscape{Units: []Unit{{Unit: UnitRef{ID: pkg.ID}, Priority: 50, Region: "protect"}}}
+	change := review.Review{ID: "review:endpoint", Delta: review.GraphDelta{Nodes: []review.NodeDelta{{ID: endpoint.ID, Status: "modified", After: &endpoint}}}}
+	result := ForReview(landscape, landscape, snapshot, snapshot, change)
+	if result.TouchedUnits != 1 || len(result.Units) != 1 || !result.Units[0].Touched || result.Units[0].FocalNodeID != endpoint.ID {
+		t.Fatalf("endpoint delta was not attributed to handler package: %#v", result)
+	}
+}

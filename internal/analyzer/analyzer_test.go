@@ -183,3 +183,40 @@ func TestApplyTelemetryTracksTrafficFieldPresence(t *testing.T) {
 		t.Fatalf("traffic presence not preserved: %#v", analysis.Telemetry)
 	}
 }
+
+func TestRunConnectsEndpointToRegisteredCallback(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		".git/HEAD":          "0123456789abcdef\n",
+		"go.mod":             "module example.com/routes\n\ngo 1.24\n",
+		"orders/handler.go":  "package orders\nfunc Handle() {}\n",
+		"routes/register.go": "package routes\nimport (\"net/http\"; \"example.com/routes/orders\")\nfunc Register() { http.HandleFunc(\"/orders\", orders.Handle) }\n",
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := Run(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpointID, handlerID := "", ""
+	for _, node := range snapshot.Nodes {
+		if node.Kind == "endpoint" && node.Label == "HTTP /orders" {
+			endpointID = node.ID
+		}
+		if node.Kind == "function" && node.Label == "Handle" {
+			handlerID = node.ID
+		}
+	}
+	for _, edge := range snapshot.Edges {
+		if edge.Source == endpointID && edge.Label == "handler" && edge.Target == handlerID {
+			return
+		}
+	}
+	t.Fatalf("endpoint %q was not connected to callback %q: %#v", endpointID, handlerID, snapshot.Edges)
+}

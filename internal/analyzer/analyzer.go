@@ -550,7 +550,11 @@ func literalString(expr ast.Expr) string {
 }
 
 func (x *indexer) resolveCall(fn function, call *ast.CallExpr) (string, string) {
-	switch target := call.Fun.(type) {
+	return x.resolveTarget(fn, call.Fun)
+}
+
+func (x *indexer) resolveTarget(fn function, expression ast.Expr) (string, string) {
+	switch target := expression.(type) {
 	case *ast.Ident:
 		return x.byPackage[fn.packageID][target.Name], target.Name
 	case *ast.SelectorExpr:
@@ -611,7 +615,15 @@ func (x *indexer) connect() {
 					}
 					id := stableID("endpoint", method+" "+path)
 					x.nodes[id] = Node{ID: id, Kind: "endpoint", Label: method + " " + path, Service: x.serviceID, File: fn.node.File}
-					x.addEdge(id, "calls", fn.node.ID, "handler", x.sourceLocation(call.Pos()))
+					handlerID := fn.node.ID
+					for index := len(call.Args) - 1; index >= 0; index-- {
+						candidate, _ := x.resolveTarget(fn, call.Args[index])
+						if kind := x.nodes[candidate].Kind; kind == "function" || kind == "method" {
+							handlerID = candidate
+							break
+						}
+					}
+					x.addEdge(id, "calls", handlerID, "handler", x.sourceLocation(call.Pos()))
 				}
 			}
 			return true

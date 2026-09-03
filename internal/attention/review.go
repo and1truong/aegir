@@ -103,7 +103,9 @@ func ForReview(base, head Landscape, baseSnapshot, headSnapshot analyzer.Snapsho
 
 func nodeUnits(snapshot analyzer.Snapshot) map[string]string {
 	packages := map[string]bool{}
+	byID := map[string]analyzer.Node{}
 	for _, node := range snapshot.Nodes {
+		byID[node.ID] = node
 		if node.Kind == "package" {
 			packages[node.ID] = true
 		}
@@ -116,6 +118,11 @@ func nodeUnits(snapshot analyzer.Snapshot) map[string]string {
 		}
 		if packages[unit] {
 			result[node.ID] = unit
+		}
+	}
+	for _, edge := range snapshot.Edges {
+		if byID[edge.Source].Kind == "endpoint" && edge.Kind == "calls" && edge.Label == "handler" && result[edge.Target] != "" {
+			result[edge.Source] = result[edge.Target]
 		}
 	}
 	return result

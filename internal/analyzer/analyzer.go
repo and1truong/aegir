@@ -451,7 +451,7 @@ func (x *indexer) collect() error {
 		imports := map[string]string{}
 		for _, spec := range parsed.Imports {
 			importPath, _ := strconv.Unquote(spec.Path.Value)
-			alias := filepath.Base(importPath)
+			alias := defaultImportAlias(importPath)
 			if spec.Name != nil {
 				alias = spec.Name.Name
 			}
@@ -518,6 +518,16 @@ func (x *indexer) collect() error {
 	}
 	x.finalizePackageOwners()
 	return nil
+}
+
+func defaultImportAlias(importPath string) string {
+	alias := filepath.Base(importPath)
+	if version := strings.TrimPrefix(alias, "v"); version != alias {
+		if _, err := strconv.Atoi(version); err == nil {
+			return filepath.Base(filepath.Dir(importPath))
+		}
+	}
+	return alias
 }
 
 func firstOwner(owners []string) string {
@@ -588,7 +598,7 @@ func (x *indexer) receiverReference(fn function, expression ast.Expr) (string, s
 			if packageID, local := x.localPackageID(importPath); local {
 				return packageID, ""
 			}
-			return "", ""
+			return stableID("package", importPath), ""
 		}
 		if bound := boundExpression(fn, value.Name, value.Pos()); bound != nil {
 			return x.receiverReference(fn, bound)
@@ -662,8 +672,12 @@ func bindingInBlock(block *ast.BlockStmt, name string, before token.Pos) ast.Exp
 	if block == nil {
 		return nil
 	}
+	return bindingInStatements(block.List, name, before)
+}
+
+func bindingInStatements(statements []ast.Stmt, name string, before token.Pos) ast.Expr {
 	var result ast.Expr
-	for _, statement := range block.List {
+	for _, statement := range statements {
 		if statement.Pos() >= before {
 			break
 		}
@@ -676,8 +690,8 @@ func bindingInBlock(block *ast.BlockStmt, name string, before token.Pos) ast.Exp
 		if binding := bindingFromScopedHeader(statement, name); binding != nil {
 			result = binding
 		}
-		if nested := containingBlock(statement, before); nested != nil {
-			if binding := bindingInBlock(nested, name, before); binding != nil {
+		if nested := containingStatements(statement, before); nested != nil {
+			if binding := bindingInStatements(nested, name, before); binding != nil {
 				return binding
 			}
 		}
@@ -739,14 +753,19 @@ func bindingFromScopedHeader(statement ast.Stmt, name string) ast.Expr {
 	return bindingFromStatement(initializer, name)
 }
 
-func containingBlock(node ast.Node, position token.Pos) *ast.BlockStmt {
-	var result *ast.BlockStmt
+func containingStatements(node ast.Node, position token.Pos) []ast.Stmt {
+	var result []ast.Stmt
 	ast.Inspect(node, func(candidate ast.Node) bool {
 		if candidate == nil || candidate.Pos() > position || candidate.End() < position {
 			return false
 		}
-		if block, ok := candidate.(*ast.BlockStmt); ok {
-			result = block
+		switch scope := candidate.(type) {
+		case *ast.BlockStmt:
+			result = scope.List
+		case *ast.CaseClause:
+			result = scope.Body
+		case *ast.CommClause:
+			result = scope.Body
 		}
 		return true
 	})
@@ -829,7 +848,10 @@ func (x *indexer) isVerbRegistration(fn function, call *ast.CallExpr) bool {
 		return false
 	}
 	_, receiverType := x.receiverReference(fn, selector.X)
-	return routeReceiverName(receiverType) || routeReceiverName(expressionName(selector.X))
+	if receiverType != "" {
+		return routeReceiverName(receiverType)
+	}
+	return routeReceiverName(expressionName(selector.X))
 }
 
 func routeReceiverName(name string) bool {

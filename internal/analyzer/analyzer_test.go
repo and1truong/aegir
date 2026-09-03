@@ -227,7 +227,7 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 		".git/HEAD":          "0123456789abcdef\n",
 		"go.mod":             "module example.com/routes\n\ngo 1.24\n",
 		"orders/handler.go":  "package orders\ntype AdminHandler struct{}\ntype PublicHandler struct{}\nfunc (h *AdminHandler) Handle() {}\nfunc (h *PublicHandler) Handle() {}\nfunc NewHandler() *PublicHandler { return &PublicHandler{} }\n",
-		"routes/register.go": "package routes\nimport \"example.com/routes/orders\"\ntype Router struct{}\ntype Cache struct{}\nfunc (Router) GET(string, any) {}\nfunc (Cache) GET(string, any) {}\nfunc onMiss() {}\nfunc Register(router Router, cache Cache, h *orders.PublicHandler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.PublicHandler).Handle); fromConstructor := orders.NewHandler(); router.GET(\"/constructor\", fromConstructor.Handle); literal := &orders.PublicHandler{}; router.GET(\"/literal\", literal.Handle); { h := &orders.AdminHandler{}; router.GET(\"/admin\", h.Handle) }; router.GET(\"/health\", func() {}); cache.GET(\"/config\", onMiss) }\n",
+		"routes/register.go": "package routes\nimport (\"example.com/routes/orders\"; \"github.com/labstack/echo/v4\")\ntype Router struct{}\ntype Cache struct{}\nfunc (Router) GET(string, any) {}\nfunc (Cache) GET(string, any) {}\nfunc onMiss() {}\nfunc External(g *echo.Group) { g.GET(\"/external\", onMiss) }\nfunc Register(router Router, api Cache, h *orders.PublicHandler) { router.GET(\"/orders\", h.Handle); router.GET(\"/method-expression\", (*orders.PublicHandler).Handle); fromConstructor := orders.NewHandler(); router.GET(\"/constructor\", fromConstructor.Handle); literal := &orders.PublicHandler{}; router.GET(\"/literal\", literal.Handle); { h := &orders.AdminHandler{}; router.GET(\"/admin\", h.Handle) }; switch { case true: h := &orders.AdminHandler{}; router.GET(\"/switch\", h.Handle) }; select { case <-make(chan struct{}): h := &orders.AdminHandler{}; router.GET(\"/select\", h.Handle); default: }; router.GET(\"/health\", func() {}); api.GET(\"/config\", onMiss) }\n",
 	} {
 		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -270,10 +270,18 @@ func TestRunConnectsEndpointToInjectedMethodCallback(t *testing.T) {
 	if connections["GET /admin"] != handlerIDs["AdminHandler.Handle"] {
 		t.Fatalf("shadowed receiver was not connected to AdminHandler.Handle: %#v", snapshot.Edges)
 	}
+	for _, label := range []string{"GET /switch", "GET /select"} {
+		if connections[label] != handlerIDs["AdminHandler.Handle"] {
+			t.Fatalf("clause-local receiver for %q was not connected to AdminHandler.Handle: %#v", label, snapshot.Edges)
+		}
+	}
 	if connections["GET /health"] != handlerIDs["Register"] {
 		t.Fatalf("inline callback did not fall back to Register: %#v", snapshot.Edges)
 	}
-	if len(endpointIDs) != 6 || endpointIDs["GET /config"] != "" {
+	if connections["GET /external"] != handlerIDs["onMiss"] {
+		t.Fatalf("external router receiver was not recognized: %#v", snapshot.Edges)
+	}
+	if len(endpointIDs) != 9 || endpointIDs["GET /config"] != "" {
 		t.Fatalf("unexpected endpoint set: %#v", endpointIDs)
 	}
 }

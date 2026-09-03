@@ -34,3 +34,7 @@ export function bubblePaintOrder<T extends { unit: AttentionUnit }>(points: read
 export function scaleCanvasPoint(x: number, y: number, cssWidth: number, cssHeight: number, logicalWidth: number, logicalHeight: number) {
   return { x: x * logicalWidth / Math.max(1, cssWidth), y: y * logicalHeight / Math.max(1, cssHeight) };
 }
+
+export function tooltipPosition(x: number, y: number, width: number, height: number) {
+  return { left: clamp(x + 12, 8, Math.max(8, width - 232)), top: clamp(y - 35, 8, Math.max(8, height - 72)) };
+}

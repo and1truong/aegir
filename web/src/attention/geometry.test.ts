@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bubblePaintOrder, bubbleRadius, jitteredScore, scaleCanvasPoint, stableJitter, zoomedScore } from './geometry.ts';
+import { bubblePaintOrder, bubbleRadius, jitteredScore, scaleCanvasPoint, stableJitter, tooltipPosition, zoomedScore } from './geometry.ts';
 import type { AttentionUnit } from './types.ts';
 
 function unit(velocity?: number, id = 'package:a'): AttentionUnit {
@@ -33,4 +33,9 @@ test('paint order draws smaller bubbles last for topmost hit testing', () => {
 
 test('pointer coordinates scale into the logical canvas size', () => {
   assert.deepEqual(scaleCanvasPoint(100, 75, 200, 150, 400, 300), { x: 200, y: 150 });
+});
+
+test('tooltip position stays inside rendered map bounds', () => {
+  assert.deepEqual(tooltipPosition(290, 290, 300, 300), { left: 68, top: 228 });
+  assert.deepEqual(tooltipPosition(0, 0, 300, 300), { left: 12, top: 8 });
 });

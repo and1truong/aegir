@@ -23,6 +23,7 @@ interface AttentionMapProps {
 export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touchedUnitIds, compact = false }: AttentionMapProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const tooltip = useRef<HTMLDivElement>(null);
+  const dismissTimer = useRef<number | undefined>(undefined);
   const [size, setSize] = useState({ width: 900, height: compact ? 280 : 500 });
   const [renderedSize, setRenderedSize] = useState(size);
   const [tooltipSize, setTooltipSize] = useState({ width: 224, height: 64 });
@@ -59,6 +60,10 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
     });
     observer.observe(element);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => () => {
+    if (dismissTimer.current !== undefined) window.clearTimeout(dismissTimer.current);
   }, []);
 
   useLayoutEffect(() => {
@@ -120,12 +125,30 @@ export function AttentionMap({ landscape, units, onOpen, theme = 'dark', touched
     return { x, y, point: [...paintedPoints].reverse().find((item) => Math.hypot(item.x - logical.x, item.y - logical.y) <= item.radius + 5) };
   };
   const leaveCanvas = (event: PointerEvent<HTMLCanvasElement>) => {
-    if (event.relatedTarget instanceof Node && tooltip.current?.contains(event.relatedTarget)) return;
+    if (event.relatedTarget instanceof Node && tooltip.current?.contains(event.relatedTarget)) {
+      if (dismissTimer.current !== undefined) window.clearTimeout(dismissTimer.current);
+      dismissTimer.current = undefined;
+      return;
+    }
     setHovered(undefined);
   };
+  const updateHovered = (event: PointerEvent<HTMLCanvasElement>) => {
+    const hit = findPoint(event);
+    if (hit.point) {
+      if (dismissTimer.current !== undefined) window.clearTimeout(dismissTimer.current);
+      dismissTimer.current = undefined;
+      setHovered({ unit: hit.point.unit, x: hit.x, y: hit.y });
+      return;
+    }
+    if (dismissTimer.current !== undefined) window.clearTimeout(dismissTimer.current);
+    dismissTimer.current = window.setTimeout(() => {
+      dismissTimer.current = undefined;
+      setHovered(undefined);
+    }, 150);
+  };
   return <div className={`relative flex-1 overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/50 ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`}>
-    <canvas ref={canvas} className={`h-full w-full ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`} aria-label={`Attention Map with ${units.length} package bubbles`} onWheel={(event) => { const next = zoomAfterWheel(zoom, event.deltaY); if (next === zoom) return; event.preventDefault(); setZoom(next) }} onPointerMove={(event) => { const hit = findPoint(event); setHovered(hit.point ? { unit: hit.point.unit, x: hit.x, y: hit.y } : undefined) }} onPointerLeave={leaveCanvas} onClick={(event) => { const hit = findPoint(event); if (hit.point) onOpen(hit.point.unit.unit.id) }} />
+    <canvas ref={canvas} className={`h-full w-full ${compact ? 'min-h-[280px]' : 'min-h-[420px]'}`} aria-label={`Attention Map with ${units.length} package bubbles`} onWheel={(event) => { const next = zoomAfterWheel(zoom, event.deltaY); if (next === zoom) return; event.preventDefault(); setZoom(next) }} onPointerMove={updateHovered} onPointerLeave={leaveCanvas} onClick={(event) => { const hit = findPoint(event); if (hit.point) onOpen(hit.point.unit.unit.id) }} />
     <div className="absolute right-2 top-2 flex rounded border border-zinc-700 bg-zinc-950/90" aria-label="Attention Map zoom controls"><button type="button" onClick={() => setZoom((value) => clamp(value - .25, 1, 3))} disabled={zoom === 1} aria-label="Zoom out" className="p-1.5 text-zinc-400 disabled:opacity-30"><Minus className="h-3 w-3" /></button><button type="button" onClick={() => setZoom(1)} aria-label="Reset zoom" title={`${Math.round(zoom * 100)}%`} className="border-x border-zinc-700 p-1.5 text-zinc-400"><RotateCcw className="h-3 w-3" /></button><button type="button" onClick={() => setZoom((value) => clamp(value + .25, 1, 3))} disabled={zoom === 3} aria-label="Zoom in" className="p-1.5 text-zinc-400 disabled:opacity-30"><Plus className="h-3 w-3" /></button></div>
-    {hovered && <div ref={tooltip} role="tooltip" onPointerLeave={() => setHovered(undefined)} className="pointer-events-auto absolute z-10 w-56 overflow-auto rounded-md border border-zinc-700 bg-zinc-950/95 p-2 shadow-xl" style={tooltipPosition(hovered.x, hovered.y, renderedSize.width, renderedSize.height, tooltipSize.width, tooltipSize.height)}><div className="font-mono text-[11px] text-zinc-100">{hovered.unit.unit.label}</div><div className="mt-1 grid grid-cols-3 gap-1 font-mono text-[9px] text-zinc-400"><span>Impact {hovered.unit.impact.score ?? '—'}</span><span>Complex {hovered.unit.changeComplexity.score ?? '—'}</span><span>Velocity {hovered.unit.changeVelocity.score ?? '—'}</span></div><div className="mt-1 text-[9px] text-zinc-500">Click to explain in graph</div></div>}
+    {hovered && <div ref={tooltip} role="tooltip" onPointerEnter={() => { if (dismissTimer.current !== undefined) window.clearTimeout(dismissTimer.current); dismissTimer.current = undefined }} onPointerLeave={() => setHovered(undefined)} className="pointer-events-auto absolute z-10 w-56 overflow-auto rounded-md border border-zinc-700 bg-zinc-950/95 p-2 shadow-xl" style={tooltipPosition(hovered.x, hovered.y, renderedSize.width, renderedSize.height, tooltipSize.width, tooltipSize.height)}><div className="font-mono text-[11px] text-zinc-100">{hovered.unit.unit.label}</div><div className="mt-1 grid grid-cols-3 gap-1 font-mono text-[9px] text-zinc-400"><span>Impact {hovered.unit.impact.score ?? '—'}</span><span>Complex {hovered.unit.changeComplexity.score ?? '—'}</span><span>Velocity {hovered.unit.changeVelocity.score ?? '—'}</span></div><button type="button" onClick={() => onOpen(hovered.unit.unit.id)} className="mt-1 text-[9px] text-zinc-500 hover:text-zinc-300">Click to explain in graph</button></div>}
   </div>;
 }
